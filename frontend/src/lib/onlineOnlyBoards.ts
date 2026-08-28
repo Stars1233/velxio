@@ -133,6 +133,29 @@ export const ONLINE_ONLY_BOARD_ADS: OnlineOnlyBoardAd[] = [
       '</svg>',
   },
   {
+    id: 'esp32-p4-preview',
+    label: 'ESP32-P4 Preview',
+    description: 'Bare ESP32-P4 DevKit: dual-core RISC-V 400MHz, 32MB PSRAM, every GPIO broken out for your own circuits — in-browser emulation',
+    thumbnailSvg:
+      '<svg width="72" height="72" viewBox="0 0 72 72" xmlns="http://www.w3.org/2000/svg">' +
+      '<rect x="20" y="4" width="32" height="64" rx="3" fill="#17181c" stroke="#3a3d42"/>' +
+      '<rect x="27" y="9" width="18" height="16" rx="1.5" fill="#b8bec6"/>' +
+      '<text x="36" y="19" text-anchor="middle" font-size="6" font-family="monospace" fill="#2d3138">P4</text>' +
+      '<g fill="#d8b44a">' +
+      '<rect x="22" y="9" width="3.5" height="3" rx="0.8"/><rect x="22" y="16" width="3.5" height="3" rx="0.8"/>' +
+      '<rect x="22" y="23" width="3.5" height="3" rx="0.8"/><rect x="22" y="30" width="3.5" height="3" rx="0.8"/>' +
+      '<rect x="22" y="37" width="3.5" height="3" rx="0.8"/><rect x="22" y="44" width="3.5" height="3" rx="0.8"/>' +
+      '<rect x="22" y="51" width="3.5" height="3" rx="0.8"/><rect x="22" y="58" width="3.5" height="3" rx="0.8"/>' +
+      '<rect x="46.5" y="9" width="3.5" height="3" rx="0.8"/><rect x="46.5" y="16" width="3.5" height="3" rx="0.8"/>' +
+      '<rect x="46.5" y="23" width="3.5" height="3" rx="0.8"/><rect x="46.5" y="30" width="3.5" height="3" rx="0.8"/>' +
+      '<rect x="46.5" y="37" width="3.5" height="3" rx="0.8"/><rect x="46.5" y="44" width="3.5" height="3" rx="0.8"/>' +
+      '<rect x="46.5" y="51" width="3.5" height="3" rx="0.8"/><rect x="46.5" y="58" width="3.5" height="3" rx="0.8"/>' +
+      '</g>' +
+      '<rect x="30" y="60" width="12" height="6" rx="1" fill="#8a8f96"/>' +
+      '<circle cx="36" cy="31" r="1.8" fill="#ff3b30"/>' +
+      '</svg>',
+  },
+  {
     id: 'esp-sensairshuttle',
     label: 'ESP-SensAirShuttle',
     description: 'Espressif ESP32-C5 sensing devkit: BME690 gas sensor + BMM350 magnetometer shuttles, 1.9" touch LCD, WiFi 6 dual-band — in-browser emulation',

@@ -171,6 +171,7 @@ const PREFERRED_BLINK_EXAMPLE: Record<string, string> = {
   'esp-vocat': 'esp-vocat-face',
   'esp-sensairshuttle': 'esp-sensair-lcd-dash',
   'esp32-p4': 'esp32-p4-blink',
+  'esp32-p4-preview': 'esp32-p4-preview-blink',
 };
 
 /** Dynamic import keeps the (large) gallery data out of the editor bundle
@@ -294,6 +295,7 @@ export function buildStarterSections(defs: ProBoardDef[]): StarterSection[] {
         ...pro('esp32-s3-eye'),
         ...pro('esp-vocat'),
         ...pro('esp32-p4'),
+        ...pro('esp32-p4-preview'),
         ...pro('esp-sensairshuttle'),
       ],
     },
