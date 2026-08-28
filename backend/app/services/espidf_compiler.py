@@ -1520,6 +1520,27 @@ class ESPIDFCompiler:
         'WCharacter.h', 'binary.h', 'pins_arduino.h', 'Esp.h',
     })
 
+    # Config headers the PROJECT is meant to supply, never a library.
+    #
+    # LVGL's sources do `#include "lv_conf.h"` behind `#if !LV_CONF_SKIP`.
+    # The include scan is textual and does not evaluate that guard, so the
+    # header is queued even for a build that defines LV_CONF_SKIP=1 and will
+    # never read it. Resolving it against the shared library dir then finds
+    # whichever installed library vendors its own copy -- Adafruit LvGL Glue
+    # ships one written for LVGL v7 -- and merges that ENTIRE library. Its
+    # sources fail against the LVGL v8 that the sketch actually uses
+    # ("lv_fs_drv_t has no member named 'user_data'", "'file_t' was not
+    # declared"), so a sketch whose only LVGL include is <lvgl.h> dies with a
+    # wall of errors naming a library the user never asked for. Same failure
+    # shape as the Hash.h -> stemihexapod case above. Reported 2026-08-28.
+    #
+    # A project that DOES ship its own lv_conf.h is unaffected: sketch files
+    # are copied into the build's own source dir and found there, not through
+    # this library scan.
+    _PROJECT_SUPPLIED_HEADERS: frozenset[str] = frozenset({
+        'lv_conf.h', 'lv_drv_conf.h',
+    })
+
     # Basenames of C/C++ standard headers. A user library that ships a private
     # header with one of these names (e.g. LovyanGFX's src/lgfx/internal/
     # limits.h, algorithm.h, memory.h, alloca.h) must NOT put that directory on
@@ -1854,6 +1875,16 @@ class ESPIDFCompiler:
             if header in self._core_provided_headers():
                 logger.info(
                     f'[espidf] <{header}> is provided by the arduino-esp32 core '
+                    f'— never resolving against user libraries'
+                )
+                continue
+
+            # Project-supplied config headers (lv_conf.h ...). See
+            # _PROJECT_SUPPLIED_HEADERS: resolving these globally drags in
+            # whatever unrelated library happens to vendor a copy.
+            if header in self._PROJECT_SUPPLIED_HEADERS:
+                logger.info(
+                    f'[espidf] <{header}> is a project-supplied config header '
                     f'— never resolving against user libraries'
                 )
                 continue
