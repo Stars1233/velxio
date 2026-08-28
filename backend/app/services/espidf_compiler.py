@@ -1538,8 +1538,35 @@ class ESPIDFCompiler:
     # are copied into the build's own source dir and found there, not through
     # this library scan.
     _PROJECT_SUPPLIED_HEADERS: frozenset[str] = frozenset({
-        'lv_conf.h', 'lv_drv_conf.h',
+        'lv_conf.h', 'lv_drv_conf.h', 'user_config.h', 'user_setup.h',
+        'sdkconfig.h', 'zconf.h',
     })
+
+    # ...and the general shape of one. Config headers are named by convention
+    # across the whole Arduino ecosystem, and one live build showed SIX of
+    # them being resolved against the shared library dir in a single compile
+    # (sdkconfig.h, lv_conf.h, lv_conf_kconfig.h, lv_rt_thread_conf.h,
+    # User_Config.h, zconf.h) — six chances to merge a library nobody asked
+    # for.
+    _CONFIG_HEADER_SUFFIXES: tuple[str, ...] = ('conf.h', 'config.h', '_setup.h')
+
+    @classmethod
+    def _is_project_config_header(cls, header: str) -> bool:
+        """Is this a build-configuration header rather than a library API?
+
+        Why skipping the library scan for these is SAFE rather than merely
+        convenient: once a library is merged, its own headers are on the
+        include path, so a config header shipped BY the library that asks for
+        it resolves at compile time without any lookup. The lookup can
+        therefore only ever pull in a DIFFERENT library — which for a config
+        header is never what the project meant. If the header really is
+        missing the compiler says so, naming it, instead of dying inside the
+        sources of a library the sketch never mentioned.
+        """
+        name = Path(header).name.lower()
+        return name in cls._PROJECT_SUPPLIED_HEADERS or name.endswith(
+            cls._CONFIG_HEADER_SUFFIXES
+        )
 
     # Basenames of C/C++ standard headers. A user library that ships a private
     # header with one of these names (e.g. LovyanGFX's src/lgfx/internal/
@@ -1849,6 +1876,10 @@ class ESPIDFCompiler:
         used_prefixes: set[str] = set()
 
         headers_to_resolve: list[str] = list(ext_headers)
+        # Headers the SKETCH itself included. The config-header guard below
+        # applies only to transitively-discovered ones: a direct include is an
+        # explicit statement of intent and stays resolvable.
+        direct_headers: set[str] = set(ext_headers)
         # Headers the SKETCH itself includes (vs transitive pulls found by
         # re-scanning copied library headers). The architecture guard is
         # advisory for these: the user explicitly asked for the library, and
@@ -1879,13 +1910,15 @@ class ESPIDFCompiler:
                 )
                 continue
 
-            # Project-supplied config headers (lv_conf.h ...). See
-            # _PROJECT_SUPPLIED_HEADERS: resolving these globally drags in
-            # whatever unrelated library happens to vendor a copy.
-            if header in self._PROJECT_SUPPLIED_HEADERS:
+            # Build-configuration headers pulled in TRANSITIVELY. See
+            # _is_project_config_header: resolving these against the shared
+            # library dir drags in whatever unrelated library happens to
+            # vendor a copy, and that library's sources then fail on their own
+            # API in a build that never asked for them.
+            if header not in direct_headers and self._is_project_config_header(header):
                 logger.info(
-                    f'[espidf] <{header}> is a project-supplied config header '
-                    f'— never resolving against user libraries'
+                    f'[espidf] <{header}> is a build-config header pulled in '
+                    f'transitively — not resolving it against user libraries'
                 )
                 continue
 

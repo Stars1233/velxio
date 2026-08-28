@@ -200,6 +200,54 @@ class TestProjectSuppliedHeaders(unittest.TestCase):
             "a sketch that only includes <lvgl.h> must not merge the glue library",
         )
 
+    def test_the_guard_is_generic_not_an_lvgl_special_case(self):
+        """Every config-header shape, not a hardcoded list of two names.
+
+        One live compile resolved six of these against the shared library dir
+        in a single build, so the rule has to be about the shape of the name.
+        """
+        for cfg in (
+            "lv_conf.h", "lv_conf_kconfig.h", "lv_rt_thread_conf.h",
+            "User_Config.h", "sdkconfig.h", "zconf.h", "User_Setup.h",
+        ):
+            with self.subTest(header=cfg):
+                shutil.rmtree(self.libs, ignore_errors=True)
+                _mk(self.libs / "toplib" / "src" / "Top.h", f'#include "{cfg}"\n')
+                _mk(self.libs / "toplib" / "library.properties", "name=TopLib\n")
+                # An unrelated library that happens to vendor that config header.
+                _mk(self.libs / "zzz-stray" / "src" / cfg)
+                _mk(self.libs / "zzz-stray" / "library.properties", "name=Stray\n")
+                merged: dict[str, str] = {}
+                self._resolve(["Top.h"], merged)
+                self.assertEqual(merged.get("Top.h"), "TopLib")
+                self.assertNotIn(
+                    "Stray", merged.values(),
+                    f"<{cfg}> must not drag in an unrelated library",
+                )
+
+    def test_a_direct_sketch_include_is_still_resolved(self):
+        """The guard is for transitive pulls only.
+
+        A sketch that includes a config header itself is stating intent, and
+        that path keeps working exactly as before.
+        """
+        _mk(self.libs / "somelib" / "src" / "my_config.h")
+        _mk(self.libs / "somelib" / "library.properties", "name=SomeLib\n")
+        merged: dict[str, str] = {}
+        self._resolve(["my_config.h"], merged)
+        self.assertEqual(merged.get("my_config.h"), "SomeLib")
+
+    def test_ordinary_transitive_dependencies_still_merge(self):
+        """The guard must not touch normal library-to-library deps."""
+        _mk(self.libs / "adafruitgfx" / "src" / "Adafruit_GFX.h",
+            '#include <Adafruit_I2CDevice.h>\n')
+        _mk(self.libs / "adafruitgfx" / "library.properties", "name=Adafruit GFX Library\n")
+        _mk(self.libs / "adafruitbusio" / "src" / "Adafruit_I2CDevice.h")
+        _mk(self.libs / "adafruitbusio" / "library.properties", "name=Adafruit BusIO\n")
+        merged: dict[str, str] = {}
+        self._resolve(["Adafruit_GFX.h"], merged)
+        self.assertEqual(merged.get("Adafruit_I2CDevice.h"), "Adafruit BusIO")
+
     def test_a_library_that_owns_lv_conf_is_still_reachable_by_its_own_header(self):
         # The guard is scoped to the config header, not to the library: a
         # project that really wants the glue can still include its header.
