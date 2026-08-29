@@ -1073,6 +1073,25 @@ export const EditorToolbar = ({
         continue;
       }
 
+      // MicroPython boards never go through the C++ toolchain — mirror the
+      // single-Run branch and load the firmware + user files instead. Without
+      // this, fqbnForLanguage falls back to the Arduino FQBN and the board's
+      // main.py is compiled as sketch.ino.cpp (issue #269).
+      if (board.languageMode === 'micropython') {
+        blog('info', 'MicroPython: loading firmware and user files...');
+        try {
+          const groupFiles = useEditorStore.getState().getGroupFiles(board.activeFileGroupId);
+          const pyFiles = groupFiles.map((f) => ({ name: f.name, content: f.content }));
+          await loadMicroPythonProgram(board.id, pyFiles);
+          blog('success', 'MicroPython firmware loaded successfully');
+          ok++;
+        } catch (err) {
+          blog('error', err instanceof Error ? err.message : 'Failed to load MicroPython');
+          boardFailed++;
+        }
+        continue;
+      }
+
       const fqbn = fqbnForLanguage(board.boardKind, board.languageMode);
       if (!fqbn) {
         blog('error', 'no FQBN configured');
@@ -1206,6 +1225,16 @@ export const EditorToolbar = ({
     for (const board of refreshed) {
       if (board.running) continue;
       if (isQemuBoardKind(board.boardKind) || board.compiledProgram || board.languageMode === 'micropython') {
+        // MicroPython boards get their firmware + project (re)loaded before
+        // every start, exactly like single Run does: the pending-program slot
+        // is consumed by each boot, so a re-run that skipped compileAllBoards
+        // (nothing changed) would otherwise boot into a bare REPL. The load
+        // is a setter, so doing it again right after compile-all is harmless.
+        if (board.languageMode === 'micropython') {
+          const groupFiles = useEditorStore.getState().getGroupFiles(board.activeFileGroupId);
+          const pyFiles = groupFiles.map((f) => ({ name: f.name, content: f.content }));
+          await loadMicroPythonProgram(board.id, pyFiles);
+        }
         trackRunSimulation(board.boardKind);
         reportRun(board.boardKind);
         startBoard(board.id);
