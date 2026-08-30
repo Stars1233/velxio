@@ -19,7 +19,7 @@ import {
   formatForFile,
   targetForChip,
 } from '../../services/romCompileService';
-import { compileChip } from '../../services/chipCompileService';
+import { ensureChipWasm } from '../../services/chipFiles';
 import { clearChipDrives } from '../../simulation/customChips/chipPinDrives';
 import { requestElectricalResolve } from '../../simulation/spice/electricalResolveHook';
 import { reportRunEvent } from '../../services/metricsService';
@@ -357,29 +357,17 @@ export const EditorToolbar = ({
         const clog = (type: CompilationLog['type'], message: string) =>
           addLog({ timestamp: new Date(), type, message, target: chipTarget });
 
-        // 1. C -> WASM. Only when missing — the chip designer fills this too.
-        if (!String(props.wasmBase64 ?? '') && sourceC) {
-          clog('info', `Compiling chip "${chipLabel}" to WASM...`);
-          try {
-            const r = await compileChip(sourceC, chipJson);
-            if (r.success && r.wasm_base64) {
-              props.wasmBase64 = r.wasm_base64;
-              changed = true;
-              clog('success', `Chip "${chipLabel}" compiled (${r.byte_size} B WASM).`);
-            } else {
-              clog(
-                'error',
-                `Chip "${chipLabel}" WASM compile failed: ${r.error || r.stderr || 'unknown error'}`,
-              );
-              failed++;
-            }
-          } catch (e) {
-            clog(
-              'error',
-              `Chip "${chipLabel}" WASM compile error: ${e instanceof Error ? e.message : String(e)}`,
-            );
-            failed++;
-          }
+        // 1. C -> WASM. ensureChipWasm recompiles when the wasm is missing
+        //    OR the source hash changed since the last build (chip.c edits
+        //    clear the wasm via the file sync, but a property written
+        //    directly — e.g. by the agent — must not leave a stale binary).
+        if (sourceC) {
+          const r = await ensureChipWasm(chip.id, clog);
+          if (!r.ok) failed++;
+          // ensureChipWasm updates the component itself — refresh our copy so
+          // the ROM step below writes on top of the new properties.
+          const fresh = useSimulatorStore.getState().components.find((c) => c.id === chip.id);
+          if (fresh) Object.assign(props, fresh.properties as Record<string, unknown>);
         }
 
         // 2. program file -> ROM bytes (programmable CPU chips). Recompile

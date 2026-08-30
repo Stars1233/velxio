@@ -669,6 +669,81 @@ export const PartInspectorDialog: React.FC<PartInspectorDialogProps> = ({
                 );
               })}
 
+              {/* Custom chip attribute defaults — declared in chip.json's
+                  `attributes`, read by the chip via vx_attr_read. These are
+                  the design-time values; live tweaking during a run happens
+                  in the sensor control panel (chip.json `controls`). */}
+              {componentMetadata.id === 'custom-chip' &&
+                (() => {
+                  let defs: Array<{
+                    name: string; label?: string; type?: string;
+                    default?: number; min?: number; max?: number; step?: number;
+                  }> = [];
+                  try {
+                    const obj = JSON.parse(String(componentProperties.chipJson ?? '{}'));
+                    if (Array.isArray(obj.attributes)) defs = obj.attributes;
+                  } catch { /* mid-edit manifest */ }
+                  if (defs.length === 0) return null;
+                  const attrs = (componentProperties.attrs ?? {}) as Record<string, number>;
+                  const setAttr = (name: string, v: number) => {
+                    const sim = useSimulatorStore.getState();
+                    const comp = sim.components.find((c) => c.id === componentId);
+                    if (!comp) return;
+                    sim.updateComponent(componentId, {
+                      properties: {
+                        ...comp.properties,
+                        attrs: { ...(comp.properties.attrs as Record<string, number> ?? {}), [name]: v },
+                      },
+                    } as never);
+                  };
+                  return (
+                    <div className="pid-chip-attrs">
+                      <div className="pid-row" style={{ opacity: 0.7, fontSize: 11 }}>
+                        {t('editor.customChip.attributes')}
+                      </div>
+                      {defs.filter((d) => d && d.name).map((d) => {
+                        const isInt = d.type === 'int';
+                        const value = Number.isFinite(attrs[d.name])
+                          ? attrs[d.name]
+                          : (d.default ?? 0);
+                        const showSlider = d.min !== undefined && d.max !== undefined;
+                        return (
+                          <div key={d.name} className="pid-row">
+                            <label className="pid-row-label">{d.label || d.name}</label>
+                            {showSlider && (
+                              <input
+                                type="range"
+                                min={d.min}
+                                max={d.max}
+                                step={d.step ?? (isInt ? 1 : 0.01)}
+                                value={value}
+                                onChange={(e) => {
+                                  const v = parseFloat(e.target.value);
+                                  if (Number.isFinite(v)) setAttr(d.name, isInt ? Math.round(v) : v);
+                                }}
+                                style={{ flex: 1 }}
+                              />
+                            )}
+                            <input
+                              type="number"
+                              className="pid-input"
+                              style={{ width: 76 }}
+                              min={d.min}
+                              max={d.max}
+                              step={d.step ?? (isInt ? 1 : 0.01)}
+                              value={value}
+                              onChange={(e) => {
+                                const v = parseFloat(e.target.value);
+                                if (Number.isFinite(v)) setAttr(d.name, isInt ? Math.round(v) : v);
+                              }}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
+
               {/* Keyboard binding - drive this pushbutton with a keyboard key */}
               {isKeyBindable(componentMetadata.id) && (
                 <div className="pid-keybind">

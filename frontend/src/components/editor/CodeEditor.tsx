@@ -3,6 +3,7 @@ import { useEditorStore } from '../../store/useEditorStore';
 import { useSimulatorStore } from '../../store/useSimulatorStore';
 import { registerRetroAsm, LANGUAGE_ID as RETRO_ASM_ID } from './retroAsmLanguage';
 import { attachIntellisenseMonaco } from '../../lib/intellisenseRegistry';
+import { CHIP_JSON_SCHEMA, CHIP_JSON_SCHEMA_URI } from './chipJsonSchema';
 
 function getLanguage(filename: string): string {
   const ext = filename.split('.').pop()?.toLowerCase() ?? '';
@@ -59,6 +60,13 @@ export const CodeEditor = () => {
         language={activeFile ? getLanguage(activeFile.name) : 'cpp'}
         theme={theme}
         value={activeFile?.content ?? ''}
+        // A model path (unique per group+file) lets Monaco's JSON language
+        // service match chip.json against the schema registered below. Only
+        // set for chip manifests — other files keep the default in-memory
+        // model so nothing else changes behaviour.
+        {...(activeFile && activeFile.name.endsWith('chip.json')
+          ? { path: `velxio-ws/${useEditorStore.getState().activeGroupId}/${activeFile.name}` }
+          : {})}
         beforeMount={(monaco) => {
           // Register the 8080/Z80 assembly language once so Monaco knows how
           // to tokenize .s / .asm files when they're opened.
@@ -67,6 +75,22 @@ export const CodeEditor = () => {
           // with the pro overlay loaded it registers the completion engine
           // (idempotent per monaco instance, so per-file remounts are fine).
           attachIntellisenseMonaco(monaco);
+          // Validate chip.json manifests against the schema (idempotent per
+          // monaco instance).
+          const g = monaco as unknown as { __velxioChipJsonSchema?: boolean };
+          if (!g.__velxioChipJsonSchema && monaco.languages.json?.jsonDefaults) {
+            g.__velxioChipJsonSchema = true;
+            monaco.languages.json.jsonDefaults.setDiagnosticsOptions({
+              validate: true,
+              schemas: [
+                {
+                  uri: CHIP_JSON_SCHEMA_URI,
+                  fileMatch: ['*chip.json'],
+                  schema: CHIP_JSON_SCHEMA,
+                },
+              ],
+            });
+          }
         }}
         onChange={(value) => {
           if (activeFileId) setFileContent(activeFileId, value || '');

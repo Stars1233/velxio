@@ -206,6 +206,15 @@ interface EditorState {
   setActiveGroup: (groupId: string) => void;
   getGroupFiles: (groupId: string) => WorkspaceFile[];
   updateGroupFile: (groupId: string, fileId: string, content: string) => void;
+  /** Append a file to an existing group (no-op if the group doesn't exist
+   *  or already has a file with that name). Mirrors into `files` when the
+   *  group is active. */
+  addFileToGroup: (groupId: string, file: { name: string; content: string }) => void;
+  /** Set a group file's content WITHOUT marking it modified (programmatic
+   *  sync, e.g. chip properties -> chip.c), mirroring into `files`/Monaco
+   *  when the group is active — unlike updateGroupFile, which is a user
+   *  edit that only touches the group copy. */
+  setGroupFileContent: (groupId: string, fileId: string, content: string) => void;
   /** Replace ALL file groups atomically (used when loading a saved project).
    *  `folders` restores the tracked EMPTY folders per group (optional —
    *  folders holding files rebuild themselves from the file name prefixes). */
@@ -575,6 +584,36 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         f.id === fileId ? { ...f, content, modified: true } : f,
       );
       return { fileGroups: { ...s.fileGroups, [groupId]: groupFiles } };
+    });
+  },
+
+  addFileToGroup: (groupId: string, file: { name: string; content: string }) => {
+    set((s) => {
+      const group = s.fileGroups[groupId];
+      if (!group || group.some((f) => f.name === file.name)) return s;
+      const wsFile: WorkspaceFile = {
+        id: generateUUID(),
+        name: file.name,
+        content: file.content,
+        modified: false,
+      };
+      const groupFiles = [...group, wsFile];
+      return {
+        fileGroups: { ...s.fileGroups, [groupId]: groupFiles },
+        ...(s.activeGroupId === groupId ? { files: groupFiles } : {}),
+      };
+    });
+  },
+
+  setGroupFileContent: (groupId: string, fileId: string, content: string) => {
+    set((s) => {
+      const groupFiles = (s.fileGroups[groupId] ?? []).map((f) =>
+        f.id === fileId ? { ...f, content, modified: false } : f,
+      );
+      return {
+        fileGroups: { ...s.fileGroups, [groupId]: groupFiles },
+        ...(s.activeGroupId === groupId ? { files: groupFiles } : {}),
+      };
     });
   },
 

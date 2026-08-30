@@ -5,12 +5,7 @@ import { useEditorStore, chipFileGroupId } from '../../store/useEditorStore';
 import type { AutoSaveState } from '../../hooks/useAutoSaveProject';
 import type { WorkspaceFile } from '../../store/useEditorStore';
 import { useSimulatorStore } from '../../store/useSimulatorStore';
-import {
-  isProgrammableChip,
-  targetForChip,
-  DEFAULT_CHIP_PROGRAM_FILE,
-  DEFAULT_CHIP_PROGRAM_C,
-} from '../../services/romCompileService';
+import { installChipFileSync, ensureChipWasm } from '../../services/chipFiles';
 import type { BoardKind } from '../../types/board';
 import { boardDisplayName, isKnownBoardKind, isPiBoardKind } from '../../types/board';
 import { importProjectFile, PROJECT_FILE_ACCEPT } from '../../utils/importProject';
@@ -241,6 +236,24 @@ const IcoPencil = () => (
 
 // Integrated-circuit (chip) icon — a DIP package with pins. Marks a
 // programmable custom-chip's program section, distinct from board sections.
+/** Per-chip Compile button: hammer, spinner-ish while busy, red on error. */
+const IcoChipCompile = ({ state }: { state?: string }) => (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke={state === 'busy' ? '#888' : state && state !== 'ok' ? '#f87171' : 'currentColor'}
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+  >
+    <path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9" />
+    <path d="m18 15 4-4" />
+    <path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 3l.92.92A6.18 6.18 0 0 1 11.72 8.3V9l2 2h1.172a2 2 0 0 1 1.414.586L18.5 13.5" />
+  </svg>
+);
+
 const IcoChip = () => (
   <svg
     width="22"
@@ -497,48 +510,23 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
   const updateComponent = useSimulatorStore((s) => s.updateComponent);
   const components = useSimulatorStore((s) => s.components);
 
-  // Programmable custom-chips (CPU emulators whose chip.json declares
-  // programTargets) own a program the user can edit — a ROM source / C —
-  // shown as its own section below the boards. Behaviour/driver chips and
-  // predefined chips declare no programTargets and don't appear here (they're
-  // edited in the chip designer).
-  const programmableChips = components.filter(
-    (c) => c.metadataId === 'custom-chip' && isProgrammableChip(c.properties as Record<string, unknown>),
-  );
+  // EVERY custom chip owns an editor section: its chip.c + chip.json are
+  // ordinary files in its own group (plus the program file for programmable
+  // CPU chips). Seeding and the two-way file<->properties sync live in
+  // services/chipFiles.ts — this component just renders the groups.
+  const customChipComponents = components.filter((c) => c.metadataId === 'custom-chip');
 
-  // Ensure each programmable chip has an editable program AND its editor group.
-  // loadExample seeds groups from an example's files; THIS is the path for a
-  // chip dropped fresh from the gallery (and older projects): a fresh chip has
-  // no program yet, so seed a default program.c the user can edit and persist
-  // programFile/programTarget onto the component so Compile/Run can build it.
-  useEffect(() => {
-    const ed = useEditorStore.getState();
-    const updateComponent = useSimulatorStore.getState().updateComponent;
-    for (const chip of programmableChips) {
-      const gid = chipFileGroupId(chip.id);
-      if (ed.fileGroups[gid]) continue;
-      const props = chip.properties as Record<string, unknown>;
-      const existing = String(props.programFile ?? '').trim();
-      if (existing) {
-        // Chip already names its program (e.g. an example) — seed from its
-        // saved source if any, else empty (loadExample usually filled it).
-        ed.createFileGroup(gid, [
-          { name: existing, content: String(props.programSource ?? '') },
-        ]);
-      } else {
-        // Fresh chip from the gallery — give it a starter program.c and
-        // remember its target CPU for the ROM compiler.
-        const target = targetForChip(String(props.chipJson ?? '{}'));
-        updateComponent(chip.id, {
-          properties: { ...props, programFile: DEFAULT_CHIP_PROGRAM_FILE, programTarget: target },
-        });
-        ed.createFileGroup(gid, [
-          { name: DEFAULT_CHIP_PROGRAM_FILE, content: DEFAULT_CHIP_PROGRAM_C },
-        ]);
-      }
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [components]);
+  useEffect(() => installChipFileSync(), []);
+
+  // Per-chip Compile button state: chipId -> 'busy' | 'ok' | error string.
+  const [chipCompileState, setChipCompileState] = useState<Record<string, string>>({});
+  const compileChipNow = useCallback(async (chipId: string) => {
+    setChipCompileState((s) => ({ ...s, [chipId]: 'busy' }));
+    const r = await ensureChipWasm(chipId, (type, message) => {
+      if (type === 'error') console.warn(`[custom-chip] ${message}`);
+    });
+    setChipCompileState((s) => ({ ...s, [chipId]: r.ok ? 'ok' : (r.error ?? 'error') }));
+  }, []);
 
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
@@ -1187,10 +1175,10 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
           );
         })}
 
-        {/* Programmable custom-chip program sections — one per chip, each its
-            own collapsible group (the chip's ROM source / C), separate from the
-            board sketch above. */}
-        {programmableChips.map((chip) => {
+        {/* Custom-chip sections — one per chip, each its own collapsible
+            group holding chip.c + chip.json (and the ROM program for
+            programmable CPU chips), separate from the board sketch above. */}
+        {customChipComponents.map((chip) => {
           const groupId = chipFileGroupId(chip.id);
           const groupFiles = fileGroups[groupId] ?? [];
           if (groupFiles.length === 0) return null;
@@ -1214,16 +1202,35 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
                     sits above, the chip's name gets the full row. */}
                 <div className="fe-board-actions-row">
                   {!(renamingSection?.id === chip.id && renamingSection.kind === 'chip') && (
-                    <button
-                      className="fe-board-new-btn"
-                      title="Rename chip (or double-click the name)"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        startChipRename(chip.id, chipName);
-                      }}
-                    >
-                      <IcoPencil />
-                    </button>
+                    <>
+                      <button
+                        className="fe-board-new-btn"
+                        title={
+                          chipCompileState[chip.id] === 'busy'
+                            ? 'Compiling...'
+                            : chipCompileState[chip.id] && chipCompileState[chip.id] !== 'ok'
+                              ? `Compile failed: ${chipCompileState[chip.id]}`
+                              : 'Compile chip.c to WASM'
+                        }
+                        disabled={chipCompileState[chip.id] === 'busy'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void compileChipNow(chip.id);
+                        }}
+                      >
+                        <IcoChipCompile state={chipCompileState[chip.id]} />
+                      </button>
+                      <button
+                        className="fe-board-new-btn"
+                        title="Rename chip (or double-click the name)"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          startChipRename(chip.id, chipName);
+                        }}
+                      >
+                        <IcoPencil />
+                      </button>
+                    </>
                   )}
                 </div>
 
@@ -1299,7 +1306,7 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
         })}
 
         {/* Fallback: nothing on the canvas yet */}
-        {boards.length === 0 && programmableChips.length === 0 && (
+        {boards.length === 0 && customChipComponents.length === 0 && (
           <div style={{ color: '#666', fontSize: 11, padding: '12px 12px', lineHeight: 1.5 }}>
             {t('editor.fileExplorer.emptyState')}
           </div>
