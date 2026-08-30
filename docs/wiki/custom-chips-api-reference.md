@@ -644,3 +644,24 @@ Each config struct also has a `uint32_t reserved[8]` field at the end. Zero
 it out (the Velxio header initializer literally `= {.field = ...}` syntax
 zeros unmentioned fields). Future versions may use those slots; today they
 must be 0.
+
+---
+
+## Wokwi compatibility
+
+A chip written for the Wokwi custom chips C API compiles on Velxio
+**unchanged**: `#include "wokwi-api.h"` resolves to a clean-room
+compatibility header (`wokwi-compat.h`) that adapts every documented Wokwi
+symbol onto the native `vx_*` API at compile time — `chip_init` becomes
+`chip_setup`, `pin_init`/`i2c_init`/`uart_init`/`spi_init`/`timer_init`
+translate their config structs field by field, and `timer_start`'s
+microseconds are converted to the native nanoseconds. The numeric pin-mode,
+level and edge constants are already identical.
+
+chip.json is compatible too: `name`, positional `pins` (with `""` skips),
+`attrs`/`attributes`, `controls` and `display` all work. `symbol` and
+custom SVG artwork are ignored — Velxio draws its own generic chip body.
+
+Not supported: the experimental `_mcu_*` introspection API, and
+**precompiled Wokwi `.wasm` binaries** (different import namespace) —
+always recompile from source; the compile service does it in seconds.
