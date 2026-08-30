@@ -1614,7 +1614,7 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
     const isUserChip = metadata.custom && metadata.tagName === 'velxio-custom-chip';
     const effectiveMetadata = isUserChip
       ? {
-          ...(ComponentRegistry.getById('custom-chip') ?? metadata),
+          ...(ComponentRegistry.getInstance().getById('custom-chip') ?? metadata),
           defaultValues: { ...metadata.defaultValues },
         }
       : metadata;
