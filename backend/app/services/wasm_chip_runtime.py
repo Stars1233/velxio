@@ -602,6 +602,15 @@ class WasmChipRuntime:
         self._flush_stdout()
         return result
 
+    # ── Live attribute updates (sensor control panel sliders) ───────────────
+    def update_attrs(self, attrs: dict[str, float]) -> None:
+        """Apply live control values. vx_attr_read reads self._attrs on every
+        call, so the running chip sees the new values immediately — no reload.
+        Called from the worker's sensor_update command thread; a plain dict
+        update is atomic enough under the GIL for float slots."""
+        for name, value in attrs.items():
+            self._attrs[str(name)] = float(value)
+
     # ── Pin watch dispatch (worker calls this from _on_pin_change) ──────────
     def has_pin_watches(self) -> bool:
         return bool(self._pin_watches)

@@ -1,0 +1,16 @@
+{
+  "schema": "velxio-chip/v1",
+  "name": "I2C Env Sensor",
+  "author": "Velxio",
+  "license": "MIT",
+  "description": "Temperature + humidity over I2C (0x44) with live sliders. 0.1-unit registers, auto-increment pointer.",
+  "pins": ["VCC", "GND", "SDA", "SCL"],
+  "attributes": [
+    { "name": "temperature", "label": "Temperature", "type": "float", "default": 25, "min": -40, "max": 85, "step": 0.5 },
+    { "name": "humidity", "label": "Humidity", "type": "float", "default": 50, "min": 0, "max": 100, "step": 1 }
+  ],
+  "controls": [
+    { "id": "temperature", "label": "Temperature", "type": "range", "min": -40, "max": 85, "step": 0.5, "unit": "C" },
+    { "id": "humidity", "label": "Humidity", "type": "range", "min": 0, "max": 100, "step": 1, "unit": "%" }
+  ]
+}

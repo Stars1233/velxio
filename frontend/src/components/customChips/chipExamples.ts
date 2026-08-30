@@ -20,6 +20,8 @@ import mcp3008C       from './examples/mcp3008.c?raw';
 import pcf8574C       from './examples/pcf8574.c?raw';
 import ds3231C        from './examples/ds3231.c?raw';
 import pulseCounterC  from './examples/pulse-counter.c?raw';
+import co2SensorC     from './examples/co2-sensor.c?raw';
+import i2cEnvSensorC  from './examples/i2c-env-sensor.c?raw';
 
 // .chip.json sources
 import inverterJ      from './examples/inverter.chip.json?raw';
@@ -33,6 +35,8 @@ import mcp3008J       from './examples/mcp3008.chip.json?raw';
 import pcf8574J       from './examples/pcf8574.chip.json?raw';
 import ds3231J        from './examples/ds3231.chip.json?raw';
 import pulseCounterJ  from './examples/pulse-counter.chip.json?raw';
+import co2SensorJ     from './examples/co2-sensor.chip.json?raw';
+import i2cEnvSensorJ  from './examples/i2c-env-sensor.chip.json?raw';
 
 // .c sources — clean-room retro Intel/Zilog CPUs and bus chips
 // (test/test_intel — 129 tests, all passing; manuals cited in autosearch/)
@@ -157,6 +161,22 @@ export const CHIP_EXAMPLES: ChipExample[] = [
     category: 'analog',
     sourceC: mcp3008C,
     chipJson: mcp3008J,
+  },
+  {
+    id: 'co2-sensor',
+    name: 'CO2 Sensor (live slider)',
+    description: 'Programmable analog sensor: a ppm slider you move WHILE the sim runs; OUT maps 400-5000 ppm to 0-5V.',
+    category: 'analog',
+    sourceC: co2SensorC,
+    chipJson: co2SensorJ,
+  },
+  {
+    id: 'i2c-env-sensor',
+    name: 'I2C Env Sensor (live sliders)',
+    description: 'Temperature + humidity registers over I2C (0x44), driven by live sliders during the simulation.',
+    category: 'protocol',
+    sourceC: i2cEnvSensorC,
+    chipJson: i2cEnvSensorJ,
   },
   {
     id: 'uart-rot13',

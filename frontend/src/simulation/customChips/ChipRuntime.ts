@@ -182,6 +182,10 @@ export class ChipInstance {
   private _framebuffer: { rgba: Uint8Array; width: number; height: number } | null = null;
   private _onFramebufferUpdate: ((rgba: Uint8Array, w: number, h: number) => void) | null = null;
 
+  /** Host hook: the chip drove an analog voltage on a pin (vx_pin_dac_write).
+   *  CustomChipPart forwards it into the wired board's ADC channel. */
+  private _onDacWrite: ((pinName: string, voltage: number) => void) | null = null;
+
   /** I2C device wrapper currently registered on the bus (for disposal). */
   private _i2cDevice: { address: number } | null = null;
 
@@ -472,6 +476,25 @@ export class ChipInstance {
     const p = this.pins[handle];
     if (!p || p.arduinoPin == null) return;
     this.pinManager.setAnalogVoltage(p.arduinoPin, voltage);
+    // Electrical mode: the DAC level drives the pin's net at its REAL voltage
+    // (the digital _syncSpiceDrive path only knows rail-or-ground).
+    if (this.componentId && p.name && isSyntheticChipPin(p.arduinoPin) && !this._isBusPin(p)) {
+      if (setChipPinDrive(this.componentId, p.name, voltage)) requestElectricalResolve();
+    }
+    // Board ADC path: nothing subscribes to PinManager's analog listeners in
+    // production, so the part host forwards this into setAdcVoltage.
+    this._onDacWrite?.(p.name, voltage);
+  }
+
+  /** Register the host-side DAC forwarding hook. */
+  onDacWrite(cb: (pinName: string, voltage: number) => void): void {
+    this._onDacWrite = cb;
+  }
+
+  /** Live attribute update (sensor control panel). vx_attr_read re-reads the
+   *  map on every call, so the running WASM sees the new value immediately. */
+  setAttr(name: string, value: number): void {
+    this.attrs.set(name, value);
   }
 
   private _pin_set_mode(handle: number, mode: number): void {

@@ -2239,6 +2239,20 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
                         )
                     elif stype == 'ds3231' and slave is not None:
                         slave.temperatureC = float(sensor.get('temperature', 25.0))
+                    elif stype == 'custom-chip':
+                        # Live control values (chip.json `controls`) land on
+                        # the chip runtime's attr store; the running WASM
+                        # re-reads them on every vx_attr_read.
+                        rt = sensor.get('runtime')
+                        new_attrs = cmd.get('attrs')
+                        if rt is not None and isinstance(new_attrs, dict):
+                            try:
+                                rt.update_attrs({
+                                    str(k): float(v) for k, v in new_attrs.items()
+                                    if isinstance(v, (int, float))
+                                })
+                            except Exception as e:
+                                _log(f'[custom-chip] attr update failed: {e!r}')
 
         elif c == 'sensor_detach':
             gpio = int(cmd['pin'])

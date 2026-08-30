@@ -8,7 +8,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { getSensorControl, type SensorControl, type SliderControl, LOG_SLIDER_STEPS, logSliderToValue, logValueToSlider } from '../../simulation/sensorControlConfig';
+import { type SensorControl, type SliderControl, LOG_SLIDER_STEPS, logSliderToValue, logValueToSlider } from '../../simulation/sensorControlConfig';
+import { getSensorControlForComponentId } from '../../simulation/customChips/chipControls';
 import { dispatchSensorUpdate, getLastSensorValues } from '../../simulation/SensorUpdateRegistry';
 import './SensorControlPanel.css';
 
@@ -45,7 +46,9 @@ export const SensorControlPanel: React.FC<SensorControlPanelProps> = ({
   onClose,
 }) => {
   const { t } = useTranslation();
-  const def = getSensorControl(metadataId);
+  // Instance-aware: catalog sensors resolve by metadataId; a custom chip's
+  // controls come from its own chip.json (`controls` / ranged attributes).
+  const def = getSensorControlForComponentId(componentId);
 
   // Local slider/button state — hydrated from the registry's last-known
   // values for this componentId (so reopening a sensor or switching between

@@ -66,6 +66,7 @@ import {
   setInterconnectRuntime,
 } from '../simulation/Interconnect';
 import { SENSOR_CONTROLS, getSensorControl } from '../simulation/sensorControlConfig';
+import { getSensorControlForComponent } from '../simulation/customChips/chipControls';
 import { SINGLE_WIRE_SENSOR_MODELS } from '../simulation/sensorModels';
 import { traceBoardGpio } from '../simulation/PinTrace';
 import { dispatchSensorUpdate } from '../simulation/SensorUpdateRegistry';
@@ -2739,18 +2740,25 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
       // 2.5V) and refreshes the panel's cached value; bumping sensorResetNonce
       // remounts the open SensorControlPanel so its slider snaps back too.
       const sensorComps = get().components.filter(
-        (c) => c.metadataId && getSensorControl(c.metadataId),
+        (c) => c.metadataId && getSensorControlForComponent(c),
       );
       if (sensorComps.length > 0) {
         set((s) => ({
           components: s.components.map((c) => {
-            const def = getSensorControl(c.metadataId);
-            return def ? { ...c, properties: { ...c.properties, ...def.defaultValues } } : c;
+            const def = getSensorControlForComponent(c);
+            if (!def) return c;
+            // Custom chips keep control values under properties.attrs (the
+            // chip reads them via vx_attr_read) — never as top-level props.
+            if (c.metadataId === 'custom-chip') {
+              const prev = (c.properties.attrs ?? {}) as Record<string, number>;
+              return { ...c, properties: { ...c.properties, attrs: { ...prev, ...def.defaultValues } } };
+            }
+            return { ...c, properties: { ...c.properties, ...def.defaultValues } };
           }),
           sensorResetNonce: s.sensorResetNonce + 1,
         }));
         for (const c of sensorComps) {
-          dispatchSensorUpdate(c.id, getSensorControl(c.metadataId)!.defaultValues);
+          dispatchSensorUpdate(c.id, getSensorControlForComponent(c)!.defaultValues);
         }
       }
     },
