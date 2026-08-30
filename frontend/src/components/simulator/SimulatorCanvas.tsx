@@ -2016,10 +2016,26 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
                 setSensorControlMetadataId(component.metadataId);
               }
             } else if (component.metadataId === 'custom-chip') {
-              // A chip's sources are ordinary editor files — clicking the
-              // chip focuses its group and opens chip.c in the editor. The
-              // gallery dialog only opens for a freshly-dropped chip.
-              openChipInEditor(draggedComponentId);
+              // Board-less special case: a compiled chip ticks the moment it
+              // exists (the rAF loop gates only on the electrical pause
+              // flag), but with no wires SPICE never submits a netlist, so
+              // interactionRunning stays false and the sensor panel above is
+              // unreachable — a chip-with-slider sitting alone on the canvas
+              // had working controls nobody could open. A LIVE chip with
+              // controls gets the panel; editing stays one click away in the
+              // file explorer (chip.c / chip.json are ordinary files there).
+              const boardlessLive =
+                useSimulatorStore.getState().boards.length === 0 &&
+                !useElectricalStore.getState().paused;
+              if (boardlessLive && getSensorControlForComponent(component) !== undefined) {
+                setSensorControlComponentId(draggedComponentId);
+                setSensorControlMetadataId(component.metadataId);
+              } else {
+                // A chip's sources are ordinary editor files — clicking the
+                // chip focuses its group and opens chip.c in the editor. The
+                // gallery dialog only opens for a freshly-dropped chip.
+                openChipInEditor(draggedComponentId);
+              }
             } else if (
               isBreadboard(component.metadataId) &&
               (() => {
