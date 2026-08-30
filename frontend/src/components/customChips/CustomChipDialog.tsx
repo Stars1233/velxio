@@ -10,6 +10,7 @@
  * `properties` so the chip is fully self-contained inside the project.
  */
 import { useState, useMemo, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import Editor from '@monaco-editor/react';
 import { CHIP_EXAMPLES, BLANK_CHIP, type ChipExample } from './chipExamples';
@@ -159,7 +160,17 @@ export const CustomChipDialog = ({ initial, onClose, onSave }: CustomChipDialogP
     onSave({ chipName, sourceC, chipJson, wasmBase64, attrs });
   };
 
-  return (
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [onClose]);
+
+  // Portal to <body>: escape the canvas subtree so no ancestor stacking
+  // context can pin the dialog below floating panels (e.g. the AI chat).
+  return createPortal(
     <div style={overlayStyle} onClick={onClose}>
       <div style={dialogStyle} onClick={(e) => e.stopPropagation()}>
         <div style={headerStyle}>
@@ -302,7 +313,8 @@ export const CustomChipDialog = ({ initial, onClose, onSave }: CustomChipDialogP
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };
 
@@ -310,7 +322,8 @@ export const CustomChipDialog = ({ initial, onClose, onSave }: CustomChipDialogP
 
 const overlayStyle: React.CSSProperties = {
   position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)',
-  zIndex: 2000, display: 'flex', alignItems: 'center', justifyContent: 'center',
+  // Above every floating panel, including the pro AI chat (8000/8001).
+  zIndex: 9000, display: 'flex', alignItems: 'center', justifyContent: 'center',
 };
 const dialogStyle: React.CSSProperties = {
   width: '90vw', height: '85vh', maxWidth: 1280,

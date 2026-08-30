@@ -20,6 +20,7 @@ import {
 } from '../customChips';
 import { useSimulatorStore } from '../../store/useSimulatorStore';
 import { useElectricalStore } from '../../store/useElectricalStore';
+import { normalizeChipPinNames } from '../customChips/chipJson';
 import { clearChipDrives } from '../customChips/chipPinDrives';
 import { requestElectricalResolve } from '../spice/electricalResolveHook';
 
@@ -60,21 +61,19 @@ PartSimulationRegistry.register('custom-chip', {
     let pins: string[] = [];
     let display: { width: number; height: number } | null = null;
     try {
-      const obj = JSON.parse(chipJsonStr);
-      if (Array.isArray(obj.pins)) {
-        // Pin entries may be strings (Wokwi) or {name,x,y} objects.
-        pins = obj.pins.map((p: unknown) => {
-          if (typeof p === 'string') return p;
-          if (p && typeof p === 'object') return String((p as any).name ?? '');
-          return '';
-        });
-      }
+      // An empty chipJson (agent-placed chip before programming) is not an
+      // error — treat it like a pinless chip rather than throwing on ''.
+      const obj = chipJsonStr.trim() ? JSON.parse(chipJsonStr) : {};
+      pins = normalizeChipPinNames(obj.pins);
       if (obj.display && typeof obj.display.width === 'number' && typeof obj.display.height === 'number') {
         display = { width: obj.display.width, height: obj.display.height };
       }
     } catch (e) {
       console.warn(`[custom-chip] ${componentId} chip.json parse error:`, e);
       return () => {};
+    }
+    if (pins.length === 0) {
+      console.warn(`[custom-chip] ${componentId} declares no pins — chip will be inert.`);
     }
 
     // Pull saved attribute values from the component's properties.

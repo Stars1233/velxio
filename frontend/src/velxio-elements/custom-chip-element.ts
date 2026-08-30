@@ -11,6 +11,8 @@
  * (matches the Wokwi convention).
  */
 
+import { normalizeChipPins } from '../simulation/customChips/chipJson';
+
 const PIN_PITCH = 20;          // px between adjacent pins
 const PIN_INSET = 0;           // pin x-offset from chip edge
 const CHIP_PAD_Y = 14;         // top/bottom margin for first/last pin
@@ -73,20 +75,7 @@ class VelxioCustomChip extends HTMLElement {
   private _parsePins(): Array<{ name: string; x?: number; y?: number }> {
     try {
       const obj = JSON.parse(this._chipJson || '{}');
-      if (Array.isArray(obj.pins)) {
-        return obj.pins.map((p: unknown) => {
-          if (typeof p === 'string') return { name: p };
-          if (p && typeof p === 'object') {
-            const o = p as any;
-            return {
-              name: String(o.name ?? ''),
-              x: typeof o.x === 'number' ? o.x : undefined,
-              y: typeof o.y === 'number' ? o.y : undefined,
-            };
-          }
-          return { name: '' };
-        });
-      }
+      return normalizeChipPins(obj.pins);
     } catch { /* ignore */ }
     return [];
   }
