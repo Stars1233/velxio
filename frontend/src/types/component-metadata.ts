@@ -13,6 +13,7 @@ export type ComponentCategory =
   | 'output'
   | 'motors'
   | 'communication'
+  | 'connectivity'
   | 'passive'
   | 'logic'
   | 'analog'

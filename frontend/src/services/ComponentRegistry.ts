@@ -279,6 +279,22 @@ export class ComponentRegistry {
     for (const l of this._changeListeners) l();
   }
 
+  /**
+   * Remove previously merged components by id. Counterpart of
+   * mergeComponents for sources whose entries can disappear at runtime
+   * (e.g. an overlay library the user deletes from). Ids not present are
+   * ignored; no-op calls don't bump the version.
+   */
+  removeComponents(ids: string[]): void {
+    if (!ids || ids.length === 0) return;
+    const drop = new Set(ids);
+    const kept = this.allComponents.filter((c) => !drop.has(c.id));
+    if (kept.length === this.allComponents.length) return;
+    this.processMetadata(kept);
+    this._version++;
+    for (const l of this._changeListeners) l();
+  }
+
   private _version = 0;
   private _changeListeners = new Set<() => void>();
 
@@ -366,6 +382,7 @@ export class ComponentRegistry {
       output: 'Output',
       motors: 'Motors',
       communication: 'Communication',
+      connectivity: 'Connectivity',
       passive: 'Passive',
       logic: 'Logic Gates',
       analog: 'Analog',
