@@ -240,6 +240,25 @@ PartSimulationRegistry.register('custom-chip', {
           return;
         }
         instance = inst;
+
+        // Register the board-injection hooks BEFORE start(): chip_setup
+        // fires the initial OUTPUT_HIGH/LOW levels (and may write pins /
+        // the DAC synchronously), and those must reach the board too.
+        inst.onDacWrite((pinName, voltage) => {
+          const boardPin = wires.get(pinName);
+          if (boardPin == null || isSyntheticChipPin(boardPin)) return;
+          const rail = analogRailVolts(sim);
+          setAdcVoltage(sim, boardPin, Math.max(0, Math.min(voltage, rail)));
+        });
+        inst.onDigitalWrite((pinName, value) => {
+          const boardPin = wires.get(pinName);
+          if (boardPin == null || isSyntheticChipPin(boardPin)) return;
+          try {
+            (sim as { setPinState?: (pin: number, state: boolean) => void })
+              .setPinState?.(boardPin, value);
+          } catch { /* board not ready yet */ }
+        });
+
         inst.start();
 
         // Live controls (chip.json `controls` / ranged attributes): slider
@@ -259,17 +278,6 @@ PartSimulationRegistry.register('custom-chip', {
             }
           }
           if (Object.keys(attrs).length > 0) mirrorAttrsToProperties(componentId, attrs);
-        });
-
-        // DAC -> board ADC: a chip pin wired to a board analog pin feeds the
-        // board's ADC at the driven voltage (clamped to the board's rail —
-        // never assume 5 V, issue #233). Synthetic pins (no board on the
-        // net) already go through the SPICE drive path instead.
-        inst.onDacWrite((pinName, voltage) => {
-          const boardPin = wires.get(pinName);
-          if (boardPin == null || isSyntheticChipPin(boardPin)) return;
-          const rail = analogRailVolts(sim);
-          setAdcVoltage(sim, boardPin, Math.max(0, Math.min(voltage, rail)));
         });
 
         // Bridge UART: AVR Serial.write(byte) → chip.feedUart(byte).

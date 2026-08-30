@@ -191,6 +191,13 @@ export class ChipInstance {
    *  CustomChipPart forwards it into the wired board's ADC channel. */
   private _onDacWrite: ((pinName: string, voltage: number) => void) | null = null;
 
+  /** Host hook: the chip drove a DIGITAL level on a pin wired to a real
+   *  board pin. triggerPinChange only notifies canvas parts — the board's
+   *  own digitalRead never saw chip outputs (live NOT-gate audit: OUT wired
+   *  to D3 read 0 forever). CustomChipPart forwards this into the
+   *  simulator's pin-injection API. */
+  private _onDigitalWrite: ((pinName: string, value: boolean) => void) | null = null;
+
   /** I2C device wrapper currently registered on the bus (for disposal). */
   private _i2cDevice: { address: number } | null = null;
 
@@ -454,8 +461,14 @@ export class ChipInstance {
     if (this._isBusPin(p)) {
       this._busDrive(p);
     } else if (arduinoPin != null) {
-      if (mode === ChipInstance.MODE_OUTPUT_LOW)  this.pinManager.triggerPinChange(arduinoPin, false);
-      if (mode === ChipInstance.MODE_OUTPUT_HIGH) this.pinManager.triggerPinChange(arduinoPin, true);
+      if (mode === ChipInstance.MODE_OUTPUT_LOW) {
+        this.pinManager.triggerPinChange(arduinoPin, false);
+        if (!isSyntheticChipPin(arduinoPin)) this._onDigitalWrite?.(name, false);
+      }
+      if (mode === ChipInstance.MODE_OUTPUT_HIGH) {
+        this.pinManager.triggerPinChange(arduinoPin, true);
+        if (!isSyntheticChipPin(arduinoPin)) this._onDigitalWrite?.(name, true);
+      }
     }
     this._syncSpiceDrive(p);
     return handle;
@@ -475,6 +488,9 @@ export class ChipInstance {
       this._busDrive(p);
     } else {
       this.pinManager.triggerPinChange(p.arduinoPin, value !== 0);
+      // A chip output wired to a REAL board pin must reach the board's own
+      // digitalRead too — the host forwards into the simulator.
+      if (!isSyntheticChipPin(p.arduinoPin)) this._onDigitalWrite?.(p.name, value !== 0);
     }
     this._syncSpiceDrive(p);
   }
@@ -502,6 +518,11 @@ export class ChipInstance {
   /** Register the host-side DAC forwarding hook. */
   onDacWrite(cb: (pinName: string, voltage: number) => void): void {
     this._onDacWrite = cb;
+  }
+
+  /** Register the host-side digital-output forwarding hook. */
+  onDigitalWrite(cb: (pinName: string, value: boolean) => void): void {
+    this._onDigitalWrite = cb;
   }
 
   /** Live attribute update (sensor control panel). vx_attr_read re-reads the
