@@ -25,6 +25,7 @@ import { clearChipDrives } from '../customChips/chipPinDrives';
 import { isSyntheticChipPin } from '../customChips/syntheticPins';
 import { requestElectricalResolve } from '../spice/electricalResolveHook';
 import { runChipAttachExtensions } from '../customChips/chipAttachExtensions';
+import { createUartBitBanger, type UartBitBanger } from '../customChips/uartBitBang';
 import { setAdcVoltage, analogRailVolts } from './partUtils';
 
 // Physical-key (KeyboardEvent.code) -> Galaksija keyboard matrix offset, from
@@ -178,6 +179,7 @@ PartSimulationRegistry.register('custom-chip', {
     // when the user stops the simulation.
     let instance: ChipInstance | null = null;
     let uartListener: ((byte: number) => void) | null = null;
+    let uartBitBanger: UartBitBanger | null = null;
     let rafHandle = 0;
     let disposed = false;
     let keyboardCleanup: (() => void) | undefined;
@@ -234,11 +236,33 @@ PartSimulationRegistry.register('custom-chip', {
         });
 
         // Bridge UART: AVR Serial.write(byte) → chip.feedUart(byte).
-        // Chip's vx_uart_write(byte) → simulator.usart.writeByte (Serial.read).
+        // Chip's vx_uart_write(byte) → the board:
+        //   - TX wired to the hardware RX (pin 0) or unwired → USART inject
+        //     (Serial.read / the monitor), the historical path.
+        //   - TX wired to any other GPIO on an AVR board → bit-banged 8N1 on
+        //     that pin, so SoftwareSerial(rx=that pin) actually receives.
+        //     Before this, GPIO-wired chip streams (the NMEA GPS scenario)
+        //     delivered nothing at all.
         if (inst.hasUart) {
           uartListener = (byte: number) => inst.feedUart(byte);
           bridges.uartListeners.add(uartListener);
-          inst.onUartTx((byte) => avrUartTx(sim, byte));
+          const route = inst.getUartTxRoute();
+          const gpioTarget =
+            detectSimulatorKind(sim) === 'avr' &&
+            route?.txArduinoPin != null &&
+            !isSyntheticChipPin(route.txArduinoPin) &&
+            route.txArduinoPin !== 0;
+          if (gpioTarget && route) {
+            uartBitBanger = createUartBitBanger(
+              sim as never,
+              route.txArduinoPin as number,
+              route.baud,
+              `chip:${componentId}`,
+            );
+            inst.onUartTx((byte) => uartBitBanger?.write(byte));
+          } else {
+            inst.onUartTx((byte) => avrUartTx(sim, byte));
+          }
         }
 
         // Bridge framebuffer → chip's web component canvas (when chip has display).
@@ -332,6 +356,7 @@ PartSimulationRegistry.register('custom-chip', {
       if (rafHandle) cancelAnimationFrame(rafHandle);
       rafHandle = 0;
       if (uartListener) bridges.uartListeners.delete(uartListener);
+      if (uartBitBanger) { uartBitBanger.dispose(); uartBitBanger = null; }
       if (keyboardCleanup) keyboardCleanup();
       if (instance) instance.dispose();
       instance = null;

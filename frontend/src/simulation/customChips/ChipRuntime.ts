@@ -713,6 +713,21 @@ export class ChipInstance {
     this._uartTxListener = cb;
   }
 
+  /**
+   * Where a declared UART's TX physically goes: the board pin its TX chip-pin
+   * is wired to (null when unwired/synthetic) and the configured baud. Lets
+   * the part route TX to the hardware USART vs a bit-banged GPIO.
+   */
+  getUartTxRoute(handle = 0): { txArduinoPin: number | null; baud: number } | null {
+    const u = this.uarts[handle];
+    if (!u) return null;
+    const pin = this.pins[u.tx];
+    return {
+      txArduinoPin: pin?.arduinoPin ?? null,
+      baud: u.baud_rate > 0 ? u.baud_rate : 9600,
+    };
+  }
+
   /** True if the chip declared at least one UART (post-chip_setup). */
   get hasUart(): boolean {
     return this.uarts.length > 0;
