@@ -8,10 +8,16 @@
  * in-modal editor tab is gone — editing and compiling happen in the editor
  * (per-chip Compile button, or Run).
  */
-import { useMemo, useEffect } from 'react';
+import { useMemo, useEffect, useSyncExternalStore } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
-import { CHIP_EXAMPLES, BLANK_CHIP, type ChipExample } from './chipExamples';
+import {
+  getChipExamples,
+  getChipExamplesVersion,
+  subscribeChipExamples,
+  BLANK_CHIP,
+  type ChipExample,
+} from './chipExamples';
 
 export interface CustomChipDialogProps {
   chipName: string;
@@ -23,15 +29,18 @@ export interface CustomChipDialogProps {
 export const CustomChipDialog = ({ chipName, onClose, onPick }: CustomChipDialogProps) => {
   const { t } = useTranslation();
 
-  // Categories shown as section headers in the gallery.
+  // Categories shown as section headers in the gallery. Subscribed so
+  // overlay-registered examples landing after mount still render.
+  const examplesVersion = useSyncExternalStore(subscribeChipExamples, getChipExamplesVersion);
   const grouped = useMemo(() => {
     const m = new Map<string, ChipExample[]>();
-    for (const e of CHIP_EXAMPLES) {
+    for (const e of getChipExamples()) {
       if (!m.has(e.category)) m.set(e.category, []);
       m.get(e.category)!.push(e);
     }
     return Array.from(m.entries());
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [examplesVersion]);
 
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {

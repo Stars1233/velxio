@@ -17,7 +17,7 @@ import { CustomChipDialog } from '../customChips/CustomChipDialog';
 import { seedChipFileGroups, isChipSourceFile } from '../../services/chipFiles';
 import { useEditorStore, chipFileGroupId } from '../../store/useEditorStore';
 import { SensorControlPanel } from './SensorControlPanel';
-import { getSensorControlForComponent } from '../../simulation/customChips/chipControls';
+import { getSensorControlForComponent } from '../../simulation/sensorControlConfig';
 import { DynamicComponent, createComponentFromMetadata } from '../DynamicComponent';
 import { InstrumentComponent } from '../components-instruments/InstrumentComponent';
 import { ComponentRegistry } from '../../services/ComponentRegistry';

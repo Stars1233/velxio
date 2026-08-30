@@ -179,9 +179,9 @@ mode where the chip should ignore inputs (e.g. powered-down state).
 ## Attributes
 
 User-editable parameters. Design-time defaults live in the part inspector
-(right-click the chip); while the simulation RUNS, clicking the chip opens
-the sensor control panel with a live slider per control (see `controls`
-below) — moving it changes what `vx_attr_read` returns immediately.
+(right-click the chip). On velxio.dev (Pro) a chip's attributes can also be
+driven by live controls while the simulation runs; the OSS build reads the
+values saved on the component.
 
 ### Schema in `chip.json`
 
@@ -200,30 +200,6 @@ below) — moving it changes what `vx_attr_read` returns immediately.
 | `default` | Initial value |
 | `min`/`max` | If both present, a slider is shown |
 | `step` | Step size (default 1 for int, 0.01 for float) |
-
-### Live controls: `controls` in `chip.json`
-
-Declares the interactive controls shown while the simulation runs. Each
-control drives the attribute with the same id:
-
-```json
-"controls": [
-  { "id": "ppm", "label": "CO2 (ppm)", "type": "range", "min": 400, "max": 5000, "step": 10, "unit": "ppm" },
-  { "id": "trigger", "label": "Trigger", "type": "button" }
-]
-```
-
-- `type: "range"` renders a slider; `type: "button"` sends a momentary
-  `1 -> 0` pulse on the attribute (~150 ms), so a polling chip sees it.
-- `unit` (shown after the value) and `scale: "log"` are optional extras.
-- When a chip declares NO `controls`, any attribute with both `min` and
-  `max` gets a live slider automatically — so most existing chips are
-  already tunable at runtime.
-- On ESP32 boards the chip runs server-side; control changes are forwarded
-  to the worker and land on the same attribute store.
-
-Gallery reference: **CO2 Sensor (live slider)** — attribute + repeating
-timer + `vx_pin_dac_write`, re-reading the attribute every tick.
 
 ### `vx_attr_register`
 

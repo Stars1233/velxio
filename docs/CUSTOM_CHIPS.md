@@ -102,9 +102,6 @@ void chip_setup(void) {
 6. The LED toggles inverse to the built-in LED. Edit `chip.c` and Run
    again — the chip recompiles whenever its source changed.
 
-While the simulation runs, clicking a chip that declares `controls` (or
-ranged `attributes`) in its chip.json opens live sliders — try the
-**CO2 Sensor (live slider)** example.
 
 ---
 

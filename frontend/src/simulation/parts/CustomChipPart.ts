@@ -24,7 +24,7 @@ import { normalizeChipPinNames } from '../customChips/chipJson';
 import { clearChipDrives } from '../customChips/chipPinDrives';
 import { isSyntheticChipPin } from '../customChips/syntheticPins';
 import { requestElectricalResolve } from '../spice/electricalResolveHook';
-import { registerSensorUpdate, unregisterSensorUpdate } from '../SensorUpdateRegistry';
+import { runChipAttachExtensions } from '../customChips/chipAttachExtensions';
 import { setAdcVoltage, analogRailVolts } from './partUtils';
 
 // Physical-key (KeyboardEvent.code) -> Galaksija keyboard matrix offset, from
@@ -40,31 +40,6 @@ const GALAKSIJA_KEY_OFFSET: Record<string, number> = {
   Semicolon: 42, Quote: 43, Comma: 44, Equal: 45, Period: 46, Slash: 47,
   Enter: 48, Tab: 49, Delete: 51, ShiftLeft: 53, ShiftRight: 53,
 };
-
-/**
- * Debounced mirror of live control values into `properties.attrs` so slider
- * positions persist with the project. Debounced because a slider drag emits
- * a continuous stream and each updateComponent is a store write.
- */
-const pendingAttrMirror = new Map<string, { timer: ReturnType<typeof setTimeout>; attrs: Record<string, number> }>();
-function mirrorAttrsToProperties(componentId: string, attrs: Record<string, number>): void {
-  const pending = pendingAttrMirror.get(componentId);
-  const merged = { ...(pending?.attrs ?? {}), ...attrs };
-  if (pending) clearTimeout(pending.timer);
-  pendingAttrMirror.set(componentId, {
-    attrs: merged,
-    timer: setTimeout(() => {
-      pendingAttrMirror.delete(componentId);
-      const sim = useSimulatorStore.getState();
-      const comp = sim.components.find((c) => c.id === componentId);
-      if (!comp) return;
-      const prev = (comp.properties.attrs ?? {}) as Record<string, number>;
-      sim.updateComponent(componentId, {
-        properties: { ...comp.properties, attrs: { ...prev, ...merged } },
-      } as never);
-    }, 250),
-  });
-}
 
 PartSimulationRegistry.register('custom-chip', {
   attachEvents: (_element, simulator, getArduinoPin, componentId) => {
@@ -167,24 +142,14 @@ PartSimulationRegistry.register('custom-chip', {
       } catch (e) {
         console.error(`[custom-chip:${componentId}] failed to register on ESP32 backend:`, e);
       }
-      // Live controls: forward slider changes to the worker, which applies
-      // them onto the chip runtime's attr store (vx_attr_read sees them).
-      registerSensorUpdate(componentId, (values) => {
-        const attrs: Record<string, number> = {};
-        for (const [k, v] of Object.entries(values)) {
-          const n = typeof v === 'number' ? v : v === true ? 1 : 0;
-          if (Number.isFinite(n)) attrs[k] = n;
-        }
-        if (Object.keys(attrs).length === 0) return;
-        try {
-          (sim as { updateSensor?: (pin: number, props: object) => void })
-            .updateSensor?.(virtualPin, { attrs });
-        } catch { /* worker gone */ }
-        mirrorAttrsToProperties(componentId, attrs);
+      // Overlay extensions (e.g. pro live sensor controls) hook the chip
+      // lifecycle here; pure OSS registers none.
+      const cleanupExtensions = runChipAttachExtensions({
+        kind: 'esp32', componentId, simulator: sim, virtualPin,
       });
       // Cleanup: the QEMU instance is torn down on stop_esp32.
       return () => {
-        unregisterSensorUpdate(componentId);
+        cleanupExtensions();
       };
     }
     // ── End ESP32 path ──────────────────────────────────────────────────────
@@ -216,6 +181,7 @@ PartSimulationRegistry.register('custom-chip', {
     let rafHandle = 0;
     let disposed = false;
     let keyboardCleanup: (() => void) | undefined;
+    let extensionCleanup: (() => void) | undefined;
 
     (async () => {
       try {
@@ -261,23 +227,10 @@ PartSimulationRegistry.register('custom-chip', {
 
         inst.start();
 
-        // Live controls (chip.json `controls` / ranged attributes): slider
-        // moves mutate the SAME attrs Map the running WASM re-reads on every
-        // vx_attr_read — no re-instantiation. A button control sends a
-        // momentary 1 -> 0 pulse. Values also mirror (debounced) into
-        // properties.attrs so they persist with the project.
-        registerSensorUpdate(componentId, (values) => {
-          const attrs: Record<string, number> = {};
-          for (const [k, v] of Object.entries(values)) {
-            if (typeof v === 'number' && Number.isFinite(v)) {
-              inst.setAttr(k, v);
-              attrs[k] = v;
-            } else if (v === true) {
-              inst.setAttr(k, 1);
-              setTimeout(() => instance?.setAttr(k, 0), 150);
-            }
-          }
-          if (Object.keys(attrs).length > 0) mirrorAttrsToProperties(componentId, attrs);
+        // Overlay extensions (e.g. pro live sensor controls) hook the chip
+        // lifecycle here; pure OSS registers none.
+        extensionCleanup = runChipAttachExtensions({
+          kind: 'browser', componentId, simulator: sim, instance: inst, wires,
         });
 
         // Bridge UART: AVR Serial.write(byte) → chip.feedUart(byte).
@@ -375,7 +328,7 @@ PartSimulationRegistry.register('custom-chip', {
 
     return () => {
       disposed = true;
-      unregisterSensorUpdate(componentId);
+      if (extensionCleanup) extensionCleanup();
       if (rafHandle) cancelAnimationFrame(rafHandle);
       rafHandle = 0;
       if (uartListener) bridges.uartListeners.delete(uartListener);

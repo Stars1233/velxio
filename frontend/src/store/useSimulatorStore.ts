@@ -65,8 +65,7 @@ import {
   updateWires as icUpdateWires,
   setInterconnectRuntime,
 } from '../simulation/Interconnect';
-import { SENSOR_CONTROLS, getSensorControl } from '../simulation/sensorControlConfig';
-import { getSensorControlForComponent } from '../simulation/customChips/chipControls';
+import { SENSOR_CONTROLS, getSensorControl, getSensorControlForComponent } from '../simulation/sensorControlConfig';
 import { SINGLE_WIRE_SENSOR_MODELS } from '../simulation/sensorModels';
 import { traceBoardGpio } from '../simulation/PinTrace';
 import { dispatchSensorUpdate } from '../simulation/SensorUpdateRegistry';
