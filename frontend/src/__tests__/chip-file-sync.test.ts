@@ -62,6 +62,23 @@ describe('seedChipFileGroups', () => {
     expect(group().map((f) => f.name).sort()).toEqual(['chip.c', 'chip.json', 'scanner.s']);
   });
 
+  it('a wasm-only chip (no stored source) keeps its wasm — no BLANK clobber', () => {
+    seedStores({ sourceC: '', wasmBase64: 'KEEP' });
+    seedChipFileGroups();
+    syncChipFilesOnce();
+    expect(chipProps().wasmBase64).toBe('KEEP');
+    expect(chipProps().sourceC).toBe('');
+    expect(group().find((f) => f.name === CHIP_SOURCE_FILE)!.content).toBe('');
+  });
+
+  it('a genuinely fresh chip gets the BLANK starter into file AND properties', () => {
+    seedStores({ sourceC: '', wasmBase64: '' });
+    seedChipFileGroups();
+    syncChipFilesOnce();
+    expect(String(chipProps().sourceC)).toContain('chip_setup');
+    expect(group().find((f) => f.name === CHIP_SOURCE_FILE)!.content).toContain('chip_setup');
+  });
+
   it('seeds a program file for programmable chips', () => {
     seedStores({ chipJson: '{"name":"Z80","pins":["CLK"],"programTargets":["z80"]}' });
     seedChipFileGroups();

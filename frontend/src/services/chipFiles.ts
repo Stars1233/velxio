@@ -81,7 +81,12 @@ export function seedChipFileGroups(): void {
   for (const chip of customChips()) {
     const gid = chipFileGroupId(chip.id);
     const props = (chip.properties ?? {}) as Record<string, unknown>;
-    const sourceC = String(props.sourceC ?? '') || BLANK_CHIP.sourceC;
+    // The BLANK starter is only for a genuinely fresh chip. A chip that has
+    // a compiled wasm but no stored source (edge case) must seed an EMPTY
+    // chip.c — seeding the template there made the first sync pass treat it
+    // as a user edit, push the template into properties and wipe the wasm.
+    const hasWasm = String(props.wasmBase64 ?? '').length > 0;
+    const sourceC = String(props.sourceC ?? '') || (hasWasm ? '' : BLANK_CHIP.sourceC);
     const chipJson = String(props.chipJson ?? '') || BLANK_CHIP.chipJson;
 
     const group = ed.fileGroups[gid];
@@ -205,23 +210,56 @@ export function syncChipFilesOnce(): void {
 }
 
 let installed = 0;
+let pendingTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingSince = 0;
+
+/**
+ * Run the seed + sync pass NOW, cancelling any pending debounce. Call before
+ * reading `properties.sourceC/chipJson` for a compile/export so an edit made
+ * moments ago (or held back by the debounce) is never missed.
+ */
+export function flushChipFileSync(): void {
+  if (pendingTimer) {
+    clearTimeout(pendingTimer);
+    pendingTimer = null;
+  }
+  pendingSince = 0;
+  seedChipFileGroups();
+  syncChipFilesOnce();
+}
 
 /**
  * Install the seed + sync watchers. Returns an uninstall function. Reference
  * counted so a second mount (StrictMode double-effect) is harmless.
+ *
+ * The debounce is trailing-edge WITH a max-wait: both stores notify on every
+ * setState, and a running sketch that prints flushes the simulator store
+ * every animation frame — a pure trailing debounce would never fire for the
+ * whole run (review finding: chips dropped mid-run got no file group, edits
+ * never reached properties). The max-wait guarantees a pass at least every
+ * MAX_WAIT_MS while notifications keep streaming.
  */
 export function installChipFileSync(): () => void {
   installed++;
   if (installed > 1) return () => { installed--; };
 
-  let timer: ReturnType<typeof setTimeout> | null = null;
+  const DEBOUNCE_MS = 300;
+  const MAX_WAIT_MS = 1000;
+  const run = () => {
+    pendingTimer = null;
+    pendingSince = 0;
+    seedChipFileGroups();
+    syncChipFilesOnce();
+  };
   const schedule = () => {
-    if (timer) clearTimeout(timer);
-    timer = setTimeout(() => {
-      timer = null;
-      seedChipFileGroups();
-      syncChipFilesOnce();
-    }, 300);
+    const now = Date.now();
+    if (!pendingSince) pendingSince = now;
+    if (pendingTimer) {
+      if (now - pendingSince >= MAX_WAIT_MS) return; // let the armed timer fire
+      clearTimeout(pendingTimer);
+    }
+    const delay = Math.min(DEBOUNCE_MS, Math.max(0, pendingSince + MAX_WAIT_MS - now));
+    pendingTimer = setTimeout(run, delay);
   };
 
   seedChipFileGroups();
@@ -232,7 +270,9 @@ export function installChipFileSync(): () => void {
   return () => {
     installed--;
     if (installed > 0) return;
-    if (timer) clearTimeout(timer);
+    if (pendingTimer) clearTimeout(pendingTimer);
+    pendingTimer = null;
+    pendingSince = 0;
     unsubEditor();
     unsubSim();
   };
@@ -252,35 +292,55 @@ export async function ensureChipWasm(
   chipId: string,
   log?: (type: 'info' | 'success' | 'error', message: string) => void,
 ): Promise<{ ok: boolean; error?: string }> {
-  const sim = useSimulatorStore.getState();
-  const chip = sim.components.find((c: ChipComponent) => c.id === chipId);
-  if (!chip) return { ok: false, error: 'chip not found' };
-  const props = { ...(chip.properties ?? {}) } as Record<string, unknown>;
-  const label = String(props.chipName ?? 'custom chip');
-  const sourceC = String(props.sourceC ?? '');
-  if (!sourceC.trim()) return { ok: false, error: 'chip has no C source' };
+  // Commit any edit still sitting in the debounce — otherwise a chip.c change
+  // typed moments ago compiles the previous source and reports success.
+  flushChipFileSync();
 
-  const hash = chipSourceHash(sourceC);
-  if (String(props.wasmBase64 ?? '') && String(props.sourceHash ?? '') === hash) {
-    return { ok: true };
-  }
+  // The compile is a seconds-long await; re-read and retry when the source
+  // moved underneath it. The write-back merges onto the LIVE properties and
+  // only lands when the compiled source is still current — a stale spread
+  // here reverted concurrent edits and re-stamped the old wasm as fresh
+  // (review finding, data loss).
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const sim = useSimulatorStore.getState();
+    const chip = sim.components.find((c: ChipComponent) => c.id === chipId);
+    if (!chip) return { ok: false, error: 'chip not found' };
+    const props = (chip.properties ?? {}) as Record<string, unknown>;
+    const label = String(props.chipName ?? 'custom chip');
+    const sourceC = String(props.sourceC ?? '');
+    if (!sourceC.trim()) return { ok: false, error: 'chip has no C source' };
 
-  log?.('info', `Compiling chip "${label}" to WASM...`);
-  try {
-    const r = await compileChip(sourceC, String(props.chipJson ?? '') || undefined);
-    if (r.success && r.wasm_base64) {
-      sim.updateComponent(chipId, {
-        properties: { ...props, wasmBase64: r.wasm_base64, sourceHash: hash },
+    const hash = chipSourceHash(sourceC);
+    if (String(props.wasmBase64 ?? '') && String(props.sourceHash ?? '') === hash) {
+      return { ok: true };
+    }
+
+    log?.('info', `Compiling chip "${label}" to WASM...`);
+    try {
+      const r = await compileChip(sourceC, String(props.chipJson ?? '') || undefined);
+      if (!r.success || !r.wasm_base64) {
+        const err = r.error || r.stderr || 'unknown error';
+        log?.('error', `Chip "${label}" WASM compile failed: ${err}`);
+        return { ok: false, error: err };
+      }
+      flushChipFileSync();
+      const fresh = useSimulatorStore.getState().components.find((c: ChipComponent) => c.id === chipId);
+      if (!fresh) return { ok: false, error: 'chip removed during compile' };
+      const freshProps = (fresh.properties ?? {}) as Record<string, unknown>;
+      if (String(freshProps.sourceC ?? '') !== sourceC) {
+        log?.('info', `Chip "${label}" source changed during compile — recompiling.`);
+        continue;
+      }
+      useSimulatorStore.getState().updateComponent(chipId, {
+        properties: { ...freshProps, wasmBase64: r.wasm_base64, sourceHash: hash },
       } as never);
       log?.('success', `Chip "${label}" compiled (${r.byte_size} B WASM).`);
       return { ok: true };
+    } catch (e) {
+      const err = e instanceof Error ? e.message : String(e);
+      log?.('error', `Chip "${label}" WASM compile error: ${err}`);
+      return { ok: false, error: err };
     }
-    const err = r.error || r.stderr || 'unknown error';
-    log?.('error', `Chip "${label}" WASM compile failed: ${err}`);
-    return { ok: false, error: err };
-  } catch (e) {
-    const err = e instanceof Error ? e.message : String(e);
-    log?.('error', `Chip "${label}" WASM compile error: ${err}`);
-    return { ok: false, error: err };
   }
+  return { ok: false, error: 'source kept changing during compile — try again' };
 }

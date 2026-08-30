@@ -105,6 +105,8 @@ interface PinEntry {
 interface AttrEntry {
   name: string;
   default: number;
+  /** Present on string attributes (vx_attr_register_string). */
+  stringDefault?: string;
 }
 
 interface TimerEntry {
@@ -132,6 +134,8 @@ export interface ChipInstanceOptions {
   wires?: Map<string, number>;
   /** User-editable attributes — keyed by name. */
   attrs?: Map<string, number>;
+  /** String attribute values (vx_attr_register_string), from chip.json. */
+  strAttrs?: Map<string, string>;
   /** Returns simulation time in nanos (used by vx_sim_now_nanos). */
   simNanos?: SimNanosFn;
   /** Callback for chip log/printf output (defaults to console.log). */
@@ -160,6 +164,7 @@ export class ChipInstance {
   private spiBus: SPIBus | null;
   private wires: Map<string, number>;
   private attrs: Map<string, number>;
+  private strAttrs: Map<string, string>;
   private display: { width: number; height: number } | null;
   private componentId: string;
 
@@ -205,6 +210,7 @@ export class ChipInstance {
     this.spiBus = opts.spiBus ?? null;
     this.wires = opts.wires ?? new Map();
     this.attrs = opts.attrs ?? new Map();
+    this.strAttrs = opts.strAttrs ?? new Map();
     this.display = opts.display ?? null;
     this._romBytes = opts.romBytes ?? new Uint8Array(0);
     this.componentId = opts.componentId ?? '';
@@ -342,6 +348,11 @@ export class ChipInstance {
 
       vx_attr_register: (namePtr: number, defaultVal: number) => this._attr_register(namePtr, defaultVal),
       vx_attr_read:     (handle: number) => this._attr_read(handle),
+      vx_attr_register_string: (namePtr: number, defaultPtr: number) =>
+        this._attr_register_string(namePtr, defaultPtr),
+      vx_attr_string_len:  (handle: number) => this._attr_string_value(handle).length,
+      vx_attr_string_read: (handle: number, bufPtr: number, cap: number) =>
+        this._attr_string_read(handle, bufPtr, cap),
 
       vx_i2c_attach: (cfgPtr: number) => this._i2c_attach(cfgPtr),
 
@@ -364,6 +375,8 @@ export class ChipInstance {
         this._framebuffer_init(widthPtr, heightPtr),
       vx_buffer_write: (handle: number, offset: number, dataPtr: number, dataLen: number) =>
         this._buffer_write(handle, offset, dataPtr, dataLen),
+      vx_buffer_read: (handle: number, offset: number, dataPtr: number, dataLen: number) =>
+        this._buffer_read(handle, offset, dataPtr, dataLen),
 
       vx_rom_size: () => this._romBytes.length,
       vx_rom_read: (offset: number, dstPtr: number, len: number) =>
@@ -561,6 +574,33 @@ export class ChipInstance {
     return this.attrs.get(a.name) ?? a.default;
   }
 
+  /** String attributes: values come from chip.json / the diagram editor
+   *  (strAttrs option); the chip only reads them. Handles share the numeric
+   *  attr handle space (they are distinct vx_attr ints on the chip side). */
+  private _attr_register_string(namePtr: number, defaultPtr: number): number {
+    const name = readCString(this.memory!, namePtr);
+    const dflt = readCString(this.memory!, defaultPtr);
+    const handle = this.attrHandles.length;
+    this.attrHandles.push({ name, default: 0, stringDefault: dflt });
+    return handle;
+  }
+
+  private _attr_string_value(handle: number): string {
+    const a = this.attrHandles[handle];
+    if (!a || a.stringDefault === undefined) return '';
+    return this.strAttrs.get(a.name) ?? a.stringDefault;
+  }
+
+  private _attr_string_read(handle: number, bufPtr: number, cap: number): number {
+    if (!this.memory || cap <= 0) return 0;
+    const bytes = new TextEncoder().encode(this._attr_string_value(handle));
+    const n = Math.min(bytes.length, cap - 1 >= 0 ? cap - 1 : 0);
+    const dst = new Uint8Array(this.memory.buffer, bufPtr, cap);
+    dst.set(bytes.subarray(0, n));
+    if (n < cap) dst[n] = 0;
+    return n;
+  }
+
   // ── I2C ──────────────────────────────────────────────────────────────────
 
   private _i2c_attach(cfgPtr: number): number {
@@ -711,6 +751,16 @@ export class ChipInstance {
       dv.setUint32(heightPtr, h, true);
     }
     return 0;
+  }
+
+  private _buffer_read(_handle: number, offset: number, dataPtr: number, dataLen: number): void {
+    if (!this._framebuffer || !this.memory) return;
+    const src = this._framebuffer.rgba;
+    const end = Math.min(offset + dataLen, src.length);
+    const copyLen = Math.max(0, end - offset);
+    if (copyLen <= 0) return;
+    const dst = new Uint8Array(this.memory.buffer, dataPtr, copyLen);
+    dst.set(src.subarray(offset, end));
   }
 
   private _buffer_write(_handle: number, offset: number, dataPtr: number, dataLen: number): void {

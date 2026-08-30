@@ -104,13 +104,16 @@ PartSimulationRegistry.register('custom-chip', {
       console.warn(`[custom-chip] ${componentId} declares no pins — chip will be inert.`);
     }
 
-    // Pull saved attribute values from the component's properties.
+    // Pull saved attribute values from the component's properties. Numeric
+    // values feed vx_attr_read; strings feed vx_attr_string_read.
     const attrsObj: Record<string, number> = {};
+    const strAttrsObj: Record<string, string> = {};
     try {
       const raw = (props.attrs ?? {}) as Record<string, unknown>;
       for (const [k, v] of Object.entries(raw)) {
         const n = typeof v === 'number' ? v : parseFloat(String(v));
         if (!Number.isNaN(n)) attrsObj[k] = n;
+        else if (typeof v === 'string') strAttrsObj[k] = v;
       }
     } catch { /* ignore */ }
 
@@ -196,8 +199,9 @@ PartSimulationRegistry.register('custom-chip', {
       }
     }
 
-    // Convert the attribute map into a Map<string, number> for the JS runtime.
+    // Convert the attribute maps into Maps for the JS runtime.
     const attrs = new Map<string, number>(Object.entries(attrsObj));
+    const strAttrs = new Map<string, string>(Object.entries(strAttrsObj));
 
     // Lazily install the per-simulator bridges. Idempotent — safe to call
     // even if other custom chips have already wired them up.
@@ -226,6 +230,7 @@ PartSimulationRegistry.register('custom-chip', {
           spiBus: bridges.spiBus,
           wires,
           attrs,
+          strAttrs,
           display,
           romBytes,
           log: (s) => console.log(`[chip:${componentId}] ${s.replace(/\n$/, '')}`),
