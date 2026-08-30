@@ -1,22 +1,16 @@
 /*
- * wokwi-compat.h — source-level compatibility with the Wokwi custom chips
- * C API, implemented as adapters over the native Velxio API (velxio-chip.h).
+ * wokwi-compat.h — adapters for an alternate, legacy-style header naming
+ * scheme over the native Velxio API (velxio-chip.h).
  *
- * CLEAN-ROOM: written from Wokwi's public API documentation only (function
- * names, signatures and semantics as documented at docs.wokwi.com). No code
- * from Wokwi's SDK or simulator. License: MIT (Velxio project).
- *
- * A chip written for Wokwi compiles unchanged:
- *   - `#include "wokwi-api.h"` resolves to a forwarder for this header.
- *   - `chip_init()` is the entry point (mapped to Velxio's chip_setup).
- *   - Timer periods in microseconds are converted to nanoseconds.
+ * CLEAN-ROOM: written for Velxio; no third-party simulator code. Everything
+ * here is a thin static-inline / macro layer:
+ *   - `chip_init()` maps to Velxio's required `chip_setup()` export.
+ *   - Timer periods given in microseconds convert to nanoseconds.
  *   - Config structs (pin_watch_config_t, i2c_config_t, uart_config_t,
  *     spi_config_t, timer_config_t) are translated field by field, so their
  *     memory layout does not need to match anything.
  *
- * Not supported (documented gaps): the experimental _mcu_* introspection
- * API. `symbol`/custom SVG artwork in chip.json is ignored (Velxio draws
- * its own generic chip body).
+ * License: MIT (Velxio project).
  */
 
 #ifndef WOKWI_COMPAT_H
@@ -258,7 +252,7 @@ static inline wokwi_timer_t timer_init(const timer_config_t *config) {
   return vx_timer_create(config->callback, config->user_data);
 }
 
-/* Wokwi's timer_start takes MICROseconds; the native API is nanoseconds. */
+/* The alternate timer_start takes MICROseconds; the native API is nanoseconds. */
 static inline void timer_start(wokwi_timer_t timer, uint32_t micros, bool repeat) {
   vx_timer_start(timer, (uint64_t)micros * 1000ULL, repeat);
 }

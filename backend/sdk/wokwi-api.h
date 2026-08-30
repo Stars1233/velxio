@@ -1,10 +1,7 @@
 /*
- * wokwi-api.h — forwarder so a chip written for Wokwi compiles unchanged
- * (`#include "wokwi-api.h"` is the first line of every Wokwi chip).
- *
- * This is NOT Wokwi's header: it forwards to Velxio's clean-room
- * compatibility layer, which adapts the documented Wokwi API onto the
- * native velxio-chip.h. See wokwi-compat.h for what is covered.
+ * wokwi-api.h — forwarder so sources using the alternate include name
+ * compile unchanged. This is a Velxio header: it forwards to the clean-room
+ * adapter layer in wokwi-compat.h. See that file for coverage notes.
  */
 #ifndef WOKWI_API_H
 #define WOKWI_API_H
