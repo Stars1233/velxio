@@ -629,6 +629,29 @@ const ProBadge: React.FC = () => (
   </span>
 );
 
+/** Violet CUSTOM pill: a chip from the user's own My Chips library. */
+const CustomBadge: React.FC = () => (
+  <span
+    title="Your saved custom chip — only you see this part"
+    style={{
+      position: 'absolute',
+      top: 8,
+      right: 8,
+      zIndex: 1,
+      padding: '3px 10px',
+      borderRadius: 999,
+      fontSize: 11,
+      fontWeight: 700,
+      letterSpacing: 0.6,
+      color: '#f5f3ff',
+      background: 'linear-gradient(180deg,#8b5cf6,#6d28d9)',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
+    }}
+  >
+    CUSTOM
+  </span>
+);
+
 const ComponentCard: React.FC<ComponentCardProps> = ({ component, onSelect, hoverApi }) => {
   const thumbnailRef = React.useRef<HTMLDivElement>(null);
   const hover = useCardHover(
@@ -642,6 +665,7 @@ const ComponentCard: React.FC<ComponentCardProps> = ({ component, onSelect, hove
       tags: component.tags,
       thumbnail: component.thumbnail,
       pro_only: component.pro_only,
+      custom: component.custom,
     }),
     hoverApi,
   );
@@ -711,7 +735,7 @@ const ComponentCard: React.FC<ComponentCardProps> = ({ component, onSelect, hove
 
   return (
     <button className="component-card" onClick={onSelect} style={{ position: 'relative' }} {...hover}>
-      {isProBoardKind(component.id) && <ProBadge />}
+      {component.custom ? <CustomBadge /> : isProBoardKind(component.id) && <ProBadge />}
       <div className="card-thumbnail">
         {boardArt ? (
           <img

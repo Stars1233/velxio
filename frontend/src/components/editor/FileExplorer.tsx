@@ -1,11 +1,12 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React, { useState, useRef, useEffect, useCallback, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useEditorStore, chipFileGroupId } from '../../store/useEditorStore';
 import type { AutoSaveState } from '../../hooks/useAutoSaveProject';
 import type { WorkspaceFile } from '../../store/useEditorStore';
 import { useSimulatorStore } from '../../store/useSimulatorStore';
-import { installChipFileSync, ensureChipWasm } from '../../services/chipFiles';
+import { installChipFileSync, ensureChipWasm, flushChipFileSync } from '../../services/chipFiles';
+import { getChipActions, getChipActionsVersion, subscribeChipActions } from '../../lib/chipActions';
 import type { BoardKind } from '../../types/board';
 import { boardDisplayName, isKnownBoardKind, isPiBoardKind } from '../../types/board';
 import { importProjectFile, PROJECT_FILE_ACCEPT } from '../../utils/importProject';
@@ -517,6 +518,12 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
   const customChipComponents = components.filter((c) => c.metadataId === 'custom-chip');
 
   useEffect(() => installChipFileSync(), []);
+
+  // Overlay-registered per-chip actions (e.g. pro "Save to my chips") —
+  // subscribe so a registration landing after the dynamic overlay import
+  // still renders.
+  useSyncExternalStore(subscribeChipActions, getChipActionsVersion);
+  const chipActions = getChipActions();
 
   // Per-chip Compile button state: chipId -> 'busy' | 'ok' | error string.
   const [chipCompileState, setChipCompileState] = useState<Record<string, string>>({});
@@ -1220,6 +1227,22 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
                       >
                         <IcoChipCompile state={chipCompileState[chip.id]} />
                       </button>
+                      {chipActions.map((a) => (
+                        <button
+                          key={a.id}
+                          className="fe-board-new-btn"
+                          title={a.title}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // Commit any pending chip.c edit before the
+                            // action reads properties (e.g. save-to-library).
+                            flushChipFileSync();
+                            a.run(chip.id);
+                          }}
+                        >
+                          <span style={{ fontSize: 11, lineHeight: 1 }}>{a.glyph}</span>
+                        </button>
+                      ))}
                       <button
                         className="fe-board-new-btn"
                         title="Rename chip (or double-click the name)"

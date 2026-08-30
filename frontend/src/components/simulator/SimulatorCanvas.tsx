@@ -1606,7 +1606,19 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
   const handleSelectComponent = (metadata: ComponentMetadata) => {
     const { x, y } = nextDropSlot();
 
-    const component = createComponentFromMetadata(metadata, x, y);
+    // A saved chip from the user's My Chips library (overlay-merged entry,
+    // custom flag + the custom-chip element): dropping it COPIES its stored
+    // sources into a normal custom-chip component — projects stay
+    // self-contained, and every custom-chip pipeline (files, controls,
+    // compile) applies with no special-casing past this point.
+    const isUserChip = metadata.custom && metadata.tagName === 'velxio-custom-chip';
+    const effectiveMetadata = isUserChip
+      ? {
+          ...(ComponentRegistry.getById('custom-chip') ?? metadata),
+          defaultValues: { ...metadata.defaultValues },
+        }
+      : metadata;
+    const component = createComponentFromMetadata(effectiveMetadata, x, y);
     trackAddComponent(metadata.id);
     // Recorded — user can Ctrl+Z to remove the just-added component.
     recordAddComponent(component as Parameters<typeof recordAddComponent>[0]);
@@ -1617,10 +1629,12 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
     // moves to mark it.
     setSelectedComponentId(component.id);
 
-    // Custom Chips need a compile step before they can do anything — open the
-    // designer dialog immediately so the user lands in the editor.
-    if (metadata.id === 'custom-chip') {
-      setCustomChipComponentId(component.id);
+    // A fresh Custom Chip has no source yet — open the examples gallery so
+    // the user picks a starting point. A dropped library chip already
+    // carries source + compiled wasm; it goes straight to the editor.
+    if (effectiveMetadata.id === 'custom-chip') {
+      if (isUserChip) openChipInEditor(component.id);
+      else setCustomChipComponentId(component.id);
     }
   };
 

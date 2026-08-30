@@ -38,6 +38,7 @@ export interface PanelData {
   tags: string[];
   thumbnail?: string;
   pro_only?: boolean;
+  custom?: boolean;
 }
 
 export interface HoverTarget {
@@ -303,6 +304,7 @@ export const ComponentInfoPanel: React.FC<ComponentInfoPanelProps> = ({
           <span className="cip-name">{data.name}</span>
           <span className="cip-badges">
             <span className="cip-cat">{data.category}</span>
+            {data.custom && <span className="cip-custom">CUSTOM</span>}
             {data.pro_only && <span className="cip-pro">PRO</span>}
             {data.pinCount > 0 && <span className="cip-pins">{data.pinCount} pins</span>}
           </span>
