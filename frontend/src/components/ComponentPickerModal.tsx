@@ -669,11 +669,20 @@ const ComponentCard: React.FC<ComponentCardProps> = ({ component, onSelect, hove
     }),
     hoverApi,
   );
-  // Passives short-circuit to their preset SVG (value-encoded look).
+  // Two reasons to render the metadata SVG instead of a live element:
+  //   1. Passives (resistor / capacitor / inductor) — their preset SVG encodes
+  //      the value (color bands, printed label) and the live element doesn't.
+  //   2. The tag is not a registered custom element. `document.createElement`
+  //      on an unknown tag yields an inert HTMLUnknownElement, so the card
+  //      preview came up blank — which is what happened to every part drawn in
+  //      React rather than as a web component (the SPICE probes, tagged
+  //      `velxio-instr-voltmeter` / `velxio-instr-ammeter`).
+  const hasSvgThumbnail =
+    typeof component.thumbnail === 'string' && component.thumbnail.trim().startsWith('<svg');
+  const tagIsRegistered =
+    typeof customElements !== 'undefined' && customElements.get(component.tagName) !== undefined;
   const usePresetSvg =
-    PASSIVE_TAGS.has(component.tagName) &&
-    typeof component.thumbnail === 'string' &&
-    component.thumbnail.trim().startsWith('<svg');
+    hasSvgThumbnail && (PASSIVE_TAGS.has(component.tagName) || !tagIsRegistered);
   const boardArt = PI_BOARD_ART[component.tagName];
 
   // Render actual web component as thumbnail

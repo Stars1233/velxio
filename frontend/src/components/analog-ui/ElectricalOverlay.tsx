@@ -2,7 +2,8 @@
  * Floating SVG overlay that renders voltage labels at wire midpoints.
  * SPICE is always active; this overlay is visible whenever a solve has
  * landed. Reads voltages from `useElectricalStore.nodeVoltages` (updated
- * by the scheduler) and maps wires to nets via `buildWireNetMap`.
+ * by the scheduler) and maps each wire to its net via the `pinNetMap` the
+ * solver publishes alongside them.
  *
  * For nets with AC content (detected via `.tran` `timeWaveforms`) labels
  * show `~<RMS>` prefixed with a tilde to mark them as time-varying. A
@@ -21,8 +22,6 @@
 import { useMemo } from 'react';
 import { useElectricalStore } from '../../store/useElectricalStore';
 import { useSimulatorStore } from '../../store/useSimulatorStore';
-import { buildWireNetMap } from '../../simulation/spice/NetlistBuilder';
-import { BOARD_PIN_GROUPS } from '../../simulation/spice/boardPinGroups';
 import { rms, isAC } from '../../simulation/spice/waveformStats';
 
 function formatV(v: number): string {
@@ -53,48 +52,26 @@ export function ElectricalOverlay({
   const solveMs = useElectricalStore((s) => s.lastSolveMs);
   const analysisMode = useElectricalStore((s) => s.analysisMode);
   const timeWaveforms = useElectricalStore((s) => s.timeWaveforms);
+  const pinNetMap = useElectricalStore((s) => s.pinNetMap);
 
   const wires = useSimulatorStore((s) => s.wires);
-  const components = useSimulatorStore((s) => s.components);
-  const boards = useSimulatorStore((s) => s.boards);
 
   const labels = useMemo(() => {
     if (Object.keys(nodeVoltages).length === 0) return [];
-
-    const boardsForSpice = boards.map((b) => {
-      const pg = BOARD_PIN_GROUPS[b.boardKind] ?? BOARD_PIN_GROUPS.default;
-      return {
-        id: b.id,
-        vcc: pg.vcc,
-        groundPinNames: pg.gnd,
-        vccPinNames: pg.vcc_pins,
-        auxPinNames: pg.aux?.pins,
-        auxVolts: pg.aux?.volts,
-        pins: {},
-      };
-    });
-    const compsForSpice = components.map((c) => ({
-      id: c.id,
-      metadataId: c.metadataId,
-      properties: c.properties ?? {},
-    }));
-    const wiresForSpice = wires.map((w) => ({
-      id: w.id,
-      start: { componentId: w.start.componentId, pinName: w.start.pinName },
-      end: { componentId: w.end.componentId, pinName: w.end.pinName },
-    }));
-
-    const wireNetMap = buildWireNetMap({
-      components: compsForSpice,
-      wires: wiresForSpice,
-      boards: boardsForSpice,
-    });
 
     return wires
       .map((w) => {
         const mx = (w.start.x + w.end.x) / 2;
         const my = (w.start.y + w.end.y) / 2;
-        const netName = wireNetMap.get(w.id);
+        // Ask the solver which net this wire sits on. Re-deriving it here
+        // from wires + boards looked equivalent and was not: any disagreement
+        // with the netlist (an unlisted board GND pin, a wire with a length)
+        // shifts the auto-generated n<N> names and the label then reports a
+        // NEIGHBOURING net's voltage. An endpoint absent from the map means
+        // the netlist did not place that pin, so there is nothing to show.
+        const netName =
+          pinNetMap.get(`${w.start.componentId}:${w.start.pinName}`) ??
+          pinNetMap.get(`${w.end.componentId}:${w.end.pinName}`);
         const samples = netName ? timeWaveforms?.nodes.get(netName) : undefined;
         const ac = samples && samples.length > 0 && isAC(samples);
         const displayV = ac ? rms(samples!) : netName ? nodeVoltages[netName] : undefined;
@@ -111,10 +88,10 @@ export function ElectricalOverlay({
         };
       })
       .filter((l) => l.v !== undefined && l.netName !== '0');
-  }, [wires, components, boards, nodeVoltages, timeWaveforms]);
+  }, [wires, pinNetMap, nodeVoltages, timeWaveforms]);
 
-  // Hover gate kept in its own memo: the netlist rebuild above is expensive
-  // and must not re-run every time the cursor moves.
+  // Hover gate kept in its own memo so the label list above does not rebuild
+  // every time the cursor moves.
   const visibleLabels = useMemo(() => {
     if (!hoveredWireId && !hoveredComponentId && !hoveredBoardId) return [];
     return labels.filter(
