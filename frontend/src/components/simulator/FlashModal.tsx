@@ -339,7 +339,7 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
           width: 560,
           maxWidth: 'calc(100vw - 32px)',
           maxHeight: 'calc(100vh - 64px)',
-          background: 'var(--wb-1)',
+          background: 'var(--wb-5)',
           color: 'var(--wb-13)',
           border: '1px solid var(--wb-6)',
           borderRadius: 8,
@@ -650,7 +650,7 @@ const ProgressView = ({ state, webMode, onRetry, onClose, onBackToPicker }: Prog
           <div style={{ fontSize: 13, color: 'var(--wb-12)', marginBottom: 8 }}>
             {t('editor.flash.compiling')}
           </div>
-          <div style={{ height: 6, background: 'var(--wb-4)', borderRadius: 3, overflow: 'hidden', marginBottom: 12 }}>
+          <div style={{ height: 6, background: 'var(--wb-3)', borderRadius: 3, overflow: 'hidden', marginBottom: 12 }}>
             <div className="flash-indeterminate" style={{ height: '100%', width: '35%', background: 'var(--color-action-primary)' }} />
           </div>
         </>
@@ -661,7 +661,7 @@ const ProgressView = ({ state, webMode, onRetry, onClose, onBackToPicker }: Prog
           <div style={{ fontSize: 13, color: 'var(--wb-12)', marginBottom: 8 }}>
             {t('editor.flash.flashingOn', { port: state.port })}
           </div>
-          <div style={{ height: 6, background: 'var(--wb-4)', borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
+          <div style={{ height: 6, background: 'var(--wb-3)', borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
             <div
               style={{
                 height: '100%',
@@ -807,7 +807,7 @@ const secondaryBtnStyle: React.CSSProperties = {
 const selectStyle: React.CSSProperties = {
   width: '100%',
   padding: '8px 10px',
-  background: 'var(--wb-0)',
+  background: 'var(--wb-3)',
   color: 'var(--wb-13)',
   border: '1px solid var(--wb-6)',
   borderRadius: 4,
@@ -816,13 +816,13 @@ const selectStyle: React.CSSProperties = {
 };
 
 /**
- * Bed for the explanatory blocks inside the dialog. --wb-0 is the ramp's
- * deepest ground, so it reads as an inset under the --wb-1 panel in dark
- * mode and as a raised card in light mode; the hairline keeps the edge
- * visible in the light theme, where both values are near-white.
+ * Bed for the explanatory blocks inside the dialog: one ramp step deeper
+ * than the --wb-5 panel, which is a step DOWN in both themes (#252526
+ * under #2d2d2d, #eceef1 under white). The hairline keeps the edge from
+ * disappearing where the two values sit close.
  */
 const insetBoxStyle: React.CSSProperties = {
-  background: 'var(--wb-0)',
+  background: 'var(--wb-3)',
   border: '1px solid var(--wb-6)',
   borderRadius: 4,
 };

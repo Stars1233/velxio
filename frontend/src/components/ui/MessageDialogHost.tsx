@@ -61,7 +61,7 @@ export const MessageDialogHost = () => {
           width: 440,
           maxWidth: 'calc(100vw - 32px)',
           maxHeight: 'calc(100vh - 64px)',
-          background: 'var(--wb-1)',
+          background: 'var(--wb-5)',
           color: 'var(--wb-13)',
           border: '1px solid var(--wb-6)',
           borderRadius: 8,
