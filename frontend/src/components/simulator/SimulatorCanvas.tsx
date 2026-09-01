@@ -3238,7 +3238,20 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
                   key={`${sensorControlComponentId}:${sensorResetNonce}`}
                   componentId={sensorControlComponentId}
                   metadataId={sensorControlMetadataId}
-                  sensorName={meta?.name ?? sensorControlMetadataId}
+                  sensorName={
+                    // A custom chip's registry name is the generic "Custom
+                    // Chip"; the instance knows what it actually is. Without
+                    // this, every chip's panel carried the same title and two
+                    // different sensors on one canvas were indistinguishable.
+                    (sensorControlMetadataId === 'custom-chip'
+                      ? String(
+                          components.find((c) => c.id === sensorControlComponentId)
+                            ?.properties?.chipName ?? '',
+                        )
+                      : '') ||
+                    meta?.name ||
+                    sensorControlMetadataId
+                  }
                   onClose={() => {
                     setSensorControlComponentId(null);
                     setSensorControlMetadataId(null);
