@@ -273,7 +273,7 @@
 .clear-filters-btn {
   padding: 10px 20px;
   background: var(--color-action-primary);
-  color: white;
+  color: var(--color-fg-on-action);
   border: none;
   border-radius: 6px;
   font-size: 14px;

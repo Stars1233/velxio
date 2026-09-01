@@ -305,7 +305,7 @@
 
 .rotate-button {
   background-color: var(--color-action-primary);
-  color: white;
+  color: var(--color-fg-on-action);
 }
 
 .rotate-button:hover {
@@ -316,7 +316,7 @@
 
 .delete-button {
   background-color: var(--color-feedback-error);
-  color: white;
+  color: var(--color-fg-on-action);
 }
 
 .delete-button:hover {
