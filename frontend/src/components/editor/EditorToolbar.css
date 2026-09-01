@@ -193,6 +193,30 @@
 .unified-toolbar.unified-toolbar--compact .tb-btn-libraries {
   padding: 0 6px;
 }
+
+/* ── Second-tier reclaims ─────────────────────────────────────────────
+   Everything below buys width for the SAME goal: keeping the strip on one
+   row when the AI chat is docked. Measured on a 1300px window with a board
+   loaded and the chat open, together they take the compact strip from
+   805px to 699px. Two rows is the failure state -- an orphan group of
+   canvas controls under a tall header -- so trimming a label or a dropdown
+   is the cheaper trade every time. */
+.unified-toolbar.unified-toolbar--compact .tb-lang-select {
+  max-width: 74px;
+}
+
+.unified-toolbar.unified-toolbar--compact .tb-btn {
+  padding: 0 5px;
+}
+
+.unified-toolbar.unified-toolbar--compact .toolbar-group {
+  gap: 2px;
+}
+
+/* The dividers only separate groups that the tighter gaps already separate. */
+.unified-toolbar.unified-toolbar--compact .tb-divider {
+  display: none;
+}
 @container unified-toolbar (max-width: 905px) {
   .tb-board-pill-label {
     display: none;
@@ -462,21 +486,4 @@
   overflow-y: auto;
   white-space: pre-wrap;
   line-height: 1.4;
-}
-
-/* ── Appearance switch ───────────────────────────────────────────────
-   The one-click light/dark button. It is the LAST thing in the strip that
-   earns its width: the same choice lives permanently in View > Appearance,
-   the way Language lives in the Account menu.
-
-   So it steps aside as soon as the shared bar starts collapsing. Without
-   this it cost the strip 28px at every tier, which moved the whole ladder
-   ~20px earlier — a window that used to hold the toolbar on one row with
-   labels dropped to icons, and one that held it inline dropped the strip
-   to its own bar. A control that pushes the toolbar into a worse layout is
-   not worth a permanent seat; one that appears whenever there is room is.
-   See headerStripFit.ts for how the tiers are decided. */
-.unified-toolbar--compact .tb-btn-theme,
-.app-header--strip-below .tb-btn-theme {
-  display: none;
 }

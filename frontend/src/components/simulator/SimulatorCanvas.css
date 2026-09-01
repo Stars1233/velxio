@@ -483,9 +483,19 @@
   height: 18px;
 }
 .unified-toolbar.unified-toolbar--compact .board-selector {
-  max-width: 120px;
+  /* 88px still shows enough of "ESP32 DevKit…" to tell boards apart, and the
+     full name is one hover away in the select itself. The 32px this gives
+     back is 32px of not wrapping the whole bar onto a second row. */
+  max-width: 88px;
   text-overflow: ellipsis;
   overflow: hidden;
+}
+
+/* The component count is the first thing to go when the row is tight: it is
+   a number you can also read on the canvas, and it costs 24px next to the
+   controls you actually press. */
+.unified-toolbar.unified-toolbar--compact .component-count {
+  display: none;
 }
 @container unified-toolbar (max-width: 905px) {
   .component-count {
