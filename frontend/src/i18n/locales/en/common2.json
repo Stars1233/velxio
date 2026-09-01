@@ -35,6 +35,7 @@
       "exportBom": "Export Bill of Materials (CSV — Pro)",
       "exportScreenshot": "Export schematic as image (PNG — Pro)",
       "importLabel": "Import project",
+      "exportVlxLabel": "Export project (.vlx)",
       "exportLabel": "Export project (.zip)",
       "exportBomLabel": "Bill of Materials (CSV)",
       "exportScreenshotLabel": "Schematic image (PNG)",

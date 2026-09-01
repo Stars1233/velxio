@@ -129,6 +129,7 @@ export const EditorMenuBar: React.FC = () => {
     },
     { kind: 'separator' },
     { kind: 'command', id: 'project.import', label: t('editor.toolbar.importLabel', 'Import project') },
+    { kind: 'command', id: 'project.exportVlx', label: t('editor.toolbar.exportVlxLabel', 'Export project (.vlx)') },
     { kind: 'command', id: 'project.export', label: t('editor.toolbar.exportLabel', 'Export project (.zip)') },
     { kind: 'command', id: 'project.exportBom', label: t('editor.toolbar.exportBomLabel', 'Bill of Materials (CSV)'), pro: true },
     {

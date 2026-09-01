@@ -33,6 +33,7 @@
       "exportBom": "Esporta distinta base (CSV — Pro)",
       "exportScreenshot": "Esporta schema come immagine (PNG — Pro)",
       "importLabel": "Importa progetto",
+      "exportVlxLabel": "Esporta progetto (.vlx)",
       "exportLabel": "Esporta progetto (.zip)",
       "exportBomLabel": "Distinta base (CSV)",
       "exportScreenshotLabel": "Immagine dello schema (PNG)",

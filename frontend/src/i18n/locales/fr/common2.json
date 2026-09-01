@@ -33,6 +33,7 @@
       "exportBom": "Exporter la nomenclature (CSV — Pro)",
       "exportScreenshot": "Exporter le schéma en image (PNG — Pro)",
       "importLabel": "Importer un projet",
+      "exportVlxLabel": "Exporter le projet (.vlx)",
       "exportLabel": "Exporter le projet (.zip)",
       "exportBomLabel": "Nomenclature (CSV)",
       "exportScreenshotLabel": "Image du schéma (PNG)",

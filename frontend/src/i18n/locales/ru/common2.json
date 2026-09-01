@@ -33,6 +33,7 @@
       "exportBom": "Экспорт спецификации (CSV — Pro)",
       "exportScreenshot": "Экспорт схемы как изображение (PNG — Pro)",
       "importLabel": "Импортировать проект",
+      "exportVlxLabel": "Экспортировать проект (.vlx)",
       "exportLabel": "Экспортировать проект (.zip)",
       "exportBomLabel": "Спецификация (CSV)",
       "exportScreenshotLabel": "Изображение схемы (PNG)",

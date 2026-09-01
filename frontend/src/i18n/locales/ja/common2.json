@@ -33,6 +33,7 @@
       "exportBom": "部品表をエクスポート (CSV — Pro)",
       "exportScreenshot": "回路図を画像としてエクスポート (PNG — Pro)",
       "importLabel": "プロジェクトをインポート",
+      "exportVlxLabel": "プロジェクトをエクスポート (.vlx)",
       "exportLabel": "プロジェクトをエクスポート (.zip)",
       "exportBomLabel": "部品表 (CSV)",
       "exportScreenshotLabel": "回路図画像 (PNG)",

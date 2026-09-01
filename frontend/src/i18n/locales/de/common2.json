@@ -33,6 +33,7 @@
       "exportBom": "Stückliste exportieren (CSV — Pro)",
       "exportScreenshot": "Schaltplan als Bild exportieren (PNG — Pro)",
       "importLabel": "Projekt importieren",
+      "exportVlxLabel": "Projekt exportieren (.vlx)",
       "exportLabel": "Projekt exportieren (.zip)",
       "exportBomLabel": "Stückliste (CSV)",
       "exportScreenshotLabel": "Schaltplanbild (PNG)",

@@ -22,6 +22,7 @@ export type EditorCommandId =
   | 'project.open'
   | 'project.import'
   | 'project.export'
+  | 'project.exportVlx'
   | 'project.exportBom'
   | 'project.exportScreenshot'
   | 'file.new'

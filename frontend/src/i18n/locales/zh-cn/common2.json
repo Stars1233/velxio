@@ -33,6 +33,7 @@
       "exportBom": "导出物料清单 (CSV — Pro)",
       "exportScreenshot": "导出原理图为图片 (PNG — Pro)",
       "importLabel": "导入项目",
+      "exportVlxLabel": "导出项目 (.vlx)",
       "exportLabel": "导出项目 (.zip)",
       "exportBomLabel": "物料清单 (CSV)",
       "exportScreenshotLabel": "原理图图片 (PNG)",

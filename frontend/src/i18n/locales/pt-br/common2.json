@@ -33,6 +33,7 @@
       "exportBom": "Exportar Lista de Materiais (CSV — Pro)",
       "exportScreenshot": "Exportar esquemático como imagem (PNG — Pro)",
       "importLabel": "Importar projeto",
+      "exportVlxLabel": "Exportar projeto (.vlx)",
       "exportLabel": "Exportar projeto (.zip)",
       "exportBomLabel": "Lista de materiais (CSV)",
       "exportScreenshotLabel": "Imagem do esquema (PNG)",

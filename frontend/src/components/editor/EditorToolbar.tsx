@@ -24,6 +24,7 @@ import { clearChipDrives } from '../../simulation/customChips/chipPinDrives';
 import { requestElectricalResolve } from '../../simulation/spice/electricalResolveHook';
 import { reportRunEvent } from '../../services/metricsService';
 import { useProjectStore } from '../../store/useProjectStore';
+import { triggerDownloadVlx } from '../../utils/vlxFile';
 import {
   compileProgress,
   MULTI_BOARD_PROGRESS_ID,
@@ -1308,6 +1309,31 @@ export const EditorToolbar = ({
     }
   };
 
+  /** Export the workspace as a portable .vlx — the lossless format, unlike
+   *  the Wokwi .zip below which stores ONE board and drops the other boards'
+   *  wires. It was reachable only from the OSS save button (which the pro
+   *  overlay replaces with the server save modal) and from the desktop menu,
+   *  so on velxio.dev a .vlx could be imported but never produced. */
+  const handleExportVlx = () => {
+    try {
+      // Chip files sync on a 300 ms debounce; without this a chip.c edited
+      // seconds ago would export against stale properties.
+      flushChipFileSync();
+      const proj = useProjectStore.getState().currentProject;
+      const name =
+        proj?.slug ??
+        files.find((f) => f.name.endsWith('.ino'))?.name.replace('.ino', '') ??
+        undefined;
+      const filename = triggerDownloadVlx({ name });
+      setMessage({ type: 'success', text: `Exported ${filename}` });
+    } catch (err) {
+      setMessage({
+        type: 'error',
+        text: `Export failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  };
+
   const handleExport = async () => {
     try {
       const { components, wires, boards, activeBoardId, boardPosition, boardType } =
@@ -1597,6 +1623,7 @@ export const EditorToolbar = ({
   const makeMenuCommands = () => ({
     import: () => importInputRef.current?.click(),
     export: () => void handleExport(),
+    exportVlx: () => handleExportVlx(),
     bom: () => void handleExportBom(),
     screenshot: () => void handleExportScreenshot(),
     firmware: () => firmwareInputRef.current?.click(),
@@ -1627,6 +1654,7 @@ export const EditorToolbar = ({
     const offs = [
       registerEditorCommand('project.import', () => menuCommandsRef.current.import()),
       registerEditorCommand('project.export', () => menuCommandsRef.current.export()),
+      registerEditorCommand('project.exportVlx', () => menuCommandsRef.current.exportVlx()),
       registerEditorCommand('project.exportBom', () => menuCommandsRef.current.bom()),
       registerEditorCommand('project.exportScreenshot', () => menuCommandsRef.current.screenshot()),
       registerEditorCommand('firmware.upload', () => menuCommandsRef.current.firmware()),
