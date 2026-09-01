@@ -85,6 +85,8 @@ import { webFlashAvailable, webFlashMpyAvailable } from '../../lib/proWebFlash';
 import { isEsp32Family } from '../../types/boardOptions';
 import { BoardOptionsModal } from './BoardOptionsModal';
 import { useOscilloscopeStore } from '../../store/useOscilloscopeStore';
+import { resolveProbe } from '../../simulation/probeResolve';
+import { showMessageDialog } from '../../store/useMessageDialogStore';
 import {
   trackSelectBoard,
   trackAddComponent,
@@ -221,6 +223,45 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
   const updateWireInProgress = useSimulatorStore((s) => s.updateWireInProgress);
   const addWireWaypoint = useSimulatorStore((s) => s.addWireWaypoint);
   const splitWireWithJunction = useSimulatorStore((s) => s.splitWireWithJunction);
+
+  /**
+   * Put a wire on the oscilloscope.
+   *
+   * The scope was a logic analyzer keyed (board, pin); a wire is neither, so
+   * resolveProbe decides what this one actually carries — a GPIO (directly or
+   * through passives, at CPU-cycle resolution) or a SPICE net (as a voltage).
+   * Nets come from the map the SOLVER publishes, never a local re-derivation:
+   * names are positional, so any disagreement about how many nets exist makes
+   * the probe report a neighbouring node.
+   */
+  const probeWire = useCallback((wireId: string) => {
+    const state = useSimulatorStore.getState();
+    const wire = state.wires.find((w) => w.id === wireId);
+    if (!wire) return;
+    const target = resolveProbe(wire, {
+      state,
+      pinNetMap: useElectricalStore.getState().pinNetMap,
+    });
+    const osc = useOscilloscopeStore.getState();
+    if (!target) {
+      // Nothing observable yet (an isolated wire, or before the first solve).
+      // Say so rather than adding a channel that would never draw.
+      showMessageDialog(
+        t(
+          'editor.canvas.probeNothing',
+          'This wire carries no signal the scope can read yet. Connect it to a board pin, or run the circuit so the solver reports a voltage for it.',
+        ),
+        { kind: 'info' },
+      );
+      return;
+    }
+    if (target.kind === 'digital') {
+      osc.addChannel(target.boardId, target.pin, target.label, target.amplitudeV);
+    } else {
+      osc.addNetChannel(target.netName, target.label);
+    }
+    osc.openOscilloscope();
+  }, [t]);
   const setWireInProgressColor = useSimulatorStore((s) => s.setWireInProgressColor);
   const finishWireCreation = useSimulatorStore((s) => s.finishWireCreation);
   const cancelWireCreation = useSimulatorStore((s) => s.cancelWireCreation);
@@ -3916,6 +3957,52 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
                     <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
                   </svg>
                   {t('editor.canvas.addNodeHere', 'Add node here')}
+                </button>
+
+                {/* Put this wire on the scope. Sits beside "Add node here"
+                    because both answer "do something to this wire", which is
+                    what a right-click on it means. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    probeWire(wireContextMenu.wireId);
+                    setWireContextMenu(null);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    marginBottom: 8,
+                    padding: '7px 6px',
+                    background: 'none',
+                    border: 'none',
+                    borderBottom: '1px solid #3c3c3c',
+                    color: '#e6e6e6',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#2a2d2e';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'none';
+                  }}
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="2 14 6 8 10 14 14 6 18 14 22 10" />
+                  </svg>
+                  {t('editor.canvas.probeWire', 'Add to scope')}
                 </button>
 
                 <div style={{ padding: '2px 4px 8px', color: '#888', fontSize: 11 }}>

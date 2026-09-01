@@ -1363,6 +1363,9 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
     return (pin: number, state: boolean, timeMs: number) => {
       const { channels, pushSample } = useOscilloscopeStore.getState();
       for (const ch of channels) {
+        // Analog channels are fed by the SPICE bridge, not by GPIO edges —
+        // they carry a net name, not a (board, pin).
+        if (ch.kind !== 'digital') continue;
         if (ch.boardId === boardId && ch.pin === pin) pushSample(ch.id, timeMs, state);
       }
     };

@@ -181,7 +181,9 @@
         "willCompile": "Compile the sketch and flash it to a real USB-attached board"
       },
       "wifiPanel": "WiFi panel",
-      "addNodeHere": "Add node here"
+      "addNodeHere": "Add node here",
+      "probeWire": "Add to scope",
+      "probeNothing": "This wire carries no signal the scope can read yet. Connect it to a board pin, or run the circuit so the solver reports a voltage for it."
     },
     "componentPicker": {
       "title": "Add Component",
