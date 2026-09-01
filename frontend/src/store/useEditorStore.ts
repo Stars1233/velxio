@@ -215,6 +215,10 @@ interface EditorState {
    *  when the group is active — unlike updateGroupFile, which is a user
    *  edit that only touches the group copy. */
   setGroupFileContent: (groupId: string, fileId: string, content: string) => void;
+  /** Remove one file from a specific group (any group, not just the active
+   *  one — deleteFile above is active-group-scoped). Used by the chip image
+   *  sync when the image is cleared. */
+  removeFileFromGroup: (groupId: string, fileId: string) => void;
   /** Replace ALL file groups atomically (used when loading a saved project).
    *  `folders` restores the tracked EMPTY folders per group (optional —
    *  folders holding files rebuild themselves from the file name prefixes). */
@@ -603,6 +607,19 @@ export const useEditorStore = create<EditorState>((set, get) => ({
         ...(s.activeGroupId === groupId ? { files: groupFiles } : {}),
       };
     });
+  },
+
+  removeFileFromGroup: (groupId: string, fileId: string) => {
+    set((s) => ({
+      fileGroups: {
+        ...s.fileGroups,
+        [groupId]: (s.fileGroups[groupId] ?? []).filter((f) => f.id !== fileId),
+      },
+      openGroupFileIds: {
+        ...s.openGroupFileIds,
+        [groupId]: (s.openGroupFileIds[groupId] ?? []).filter((fid) => fid !== fileId),
+      },
+    }));
   },
 
   setGroupFileContent: (groupId: string, fileId: string, content: string) => {

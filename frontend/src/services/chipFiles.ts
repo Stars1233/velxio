@@ -37,6 +37,37 @@ export function isChipSourceFile(name: string): boolean {
   return name === CHIP_SOURCE_FILE || name.endsWith('.chip.c');
 }
 
+/** The optional face image: chip.png / chip.jpg / chip.jpeg / chip.svg. */
+export function isChipImageFile(name: string): boolean {
+  return /^chip\.(png|jpe?g|svg)$/i.test(name);
+}
+
+/** File name for a stored image data URL, by its mime. */
+export function chipImageFileName(dataUrl: string): string {
+  if (dataUrl.startsWith('data:image/svg')) return 'chip.svg';
+  if (dataUrl.startsWith('data:image/jpeg') || dataUrl.startsWith('data:image/jpg')) return 'chip.jpg';
+  return 'chip.png';
+}
+
+/** Normalise what a chip image FILE may hold into the properties contract
+ *  (a data: URL). Raw SVG markup pasted into chip.svg is welcomed and
+ *  wrapped; anything that is neither a data URL nor SVG text is refused so
+ *  garbage never reaches the renderer. */
+export function normalizeChipImage(content: string): string | null {
+  const c = content.trim();
+  if (!c) return '';
+  if (/^data:image\/(png|jpe?g|svg\+xml)[;,]/i.test(c)) return c;
+  if (c.startsWith('<svg') || c.startsWith('<?xml')) {
+    try {
+      const b64 = btoa(unescape(encodeURIComponent(c)));
+      return `data:image/svg+xml;base64,${b64}`;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 /** djb2 — cheap change detector for "did chip.c change since the last wasm". */
 export function chipSourceHash(source: string): string {
   let h = 5381;
@@ -59,7 +90,7 @@ function customChips(): ChipComponent[] {
 }
 
 /** Content both sides last agreed on, keyed by chip id. Session-only. */
-const lastSynced = new Map<string, { source: string; manifest: string }>();
+const lastSynced = new Map<string, { source: string; manifest: string; image: string }>();
 
 /** Forget sync state for chips that no longer exist (deleted / new project). */
 function pruneSyncState(liveIds: Set<string>): void {
@@ -95,6 +126,9 @@ export function seedChipFileGroups(): void {
         { name: CHIP_SOURCE_FILE, content: sourceC },
         { name: CHIP_MANIFEST_FILE, content: chipJson },
       ];
+      if (String(props.image ?? '')) {
+        files.push({ name: chipImageFileName(String(props.image)), content: String(props.image) });
+      }
       if (isProgrammableChip(props)) {
         const existing = String(props.programFile ?? '').trim();
         if (existing) {
@@ -115,6 +149,10 @@ export function seedChipFileGroups(): void {
       }
       if (!group.some((f) => isChipManifestFile(f.name))) {
         ed.addFileToGroup(gid, { name: CHIP_MANIFEST_FILE, content: chipJson });
+      }
+      const seedImage = String(props.image ?? '');
+      if (seedImage && !group.some((f) => isChipImageFile(f.name))) {
+        ed.addFileToGroup(gid, { name: chipImageFileName(seedImage), content: seedImage });
       }
       if (isProgrammableChip(props)) {
         const pf = String(props.programFile ?? '').trim();
@@ -139,6 +177,7 @@ export function seedChipFileGroups(): void {
       lastSynced.set(chip.id, {
         source: String(props.sourceC ?? ''),
         manifest: String(props.chipJson ?? ''),
+        image: String(props.image ?? ''),
       });
     }
   }
@@ -159,7 +198,9 @@ export function syncChipFilesOnce(): void {
     const last = lastSynced.get(chip.id) ?? {
       source: String(props.sourceC ?? ''),
       manifest: String(props.chipJson ?? ''),
+      image: String(props.image ?? ''),
     };
+    if (last.image === undefined) last.image = String(props.image ?? '');
 
     const srcFile = group.find((f) => isChipSourceFile(f.name));
     const jsonFile = group.find((f) => isChipManifestFile(f.name));
@@ -197,6 +238,34 @@ export function syncChipFilesOnce(): void {
           last.manifest = jsonFile.content;
         } catch { /* mid-edit */ }
       }
+    }
+
+    const imgFile = group.find((f) => isChipImageFile(f.name));
+    const propsImage = String(props.image ?? '');
+    if (propsImage !== last.image) {
+      // Properties changed (upload button, agent, gallery) — file follows.
+      if (propsImage) {
+        if (imgFile) {
+          if (imgFile.content !== propsImage) ed.setGroupFileContent(gid, imgFile.id, propsImage);
+        } else {
+          ed.addFileToGroup(gid, { name: chipImageFileName(propsImage), content: propsImage });
+        }
+      } else if (imgFile) {
+        ed.removeFileFromGroup(gid, imgFile.id);
+      }
+      last.image = propsImage;
+    } else if (imgFile && imgFile.content !== last.image) {
+      // User edited/pasted into the image file — properties follow, but only
+      // content the renderer can actually draw (data URL or raw SVG text).
+      const normalized = normalizeChipImage(imgFile.content);
+      if (normalized !== null) {
+        nextProps = { ...(nextProps ?? props), image: normalized };
+        last.image = imgFile.content;
+      }
+    } else if (!imgFile && last.image) {
+      // The file was removed — the property goes with it.
+      nextProps = { ...(nextProps ?? props), image: '' };
+      last.image = '';
     }
 
     if (nextProps) {

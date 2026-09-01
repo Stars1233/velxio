@@ -12,6 +12,8 @@ import {
   chipSourceHash,
   CHIP_SOURCE_FILE,
   CHIP_MANIFEST_FILE,
+  isChipImageFile,
+  normalizeChipImage,
   __resetChipFileSyncForTests,
 } from '../services/chipFiles';
 
@@ -145,5 +147,78 @@ describe('chipSourceHash', () => {
   it('is stable and change-sensitive', () => {
     expect(chipSourceHash(SRC)).toBe(chipSourceHash(SRC));
     expect(chipSourceHash(SRC)).not.toBe(chipSourceHash(SRC + ' '));
+  });
+});
+
+
+// ── Optional face image: a third synced pair, same rules as chip.c ─────────
+
+const PNG_URL = 'data:image/png;base64,iVBORw0KGgo=';
+const SVG_TEXT = '<svg xmlns="http://www.w3.org/2000/svg"><rect width="4" height="4"/></svg>';
+
+const imageFile = () => group().find((f) => isChipImageFile(f.name));
+
+describe('chip image sync', () => {
+  it('seeds chip.png from properties.image', () => {
+    seedStores({ image: PNG_URL });
+    seedChipFileGroups();
+    expect(imageFile()?.name).toBe('chip.png');
+    expect(imageFile()?.content).toBe(PNG_URL);
+  });
+
+  it('setting the property later materialises the file; clearing removes it', () => {
+    seedChipFileGroups();
+    expect(imageFile()).toBeUndefined();
+
+    seedStores({ image: PNG_URL });
+    syncChipFilesOnce();
+    expect(imageFile()?.content).toBe(PNG_URL);
+
+    seedStores({ image: '' });
+    syncChipFilesOnce();
+    expect(imageFile()).toBeUndefined();
+  });
+
+  it('raw SVG pasted into chip.svg is normalised into the property', () => {
+    seedChipFileGroups();
+    useEditorStore.getState().addFileToGroup(chipFileGroupId(CHIP_ID), {
+      name: 'chip.svg',
+      content: SVG_TEXT,
+    });
+    syncChipFilesOnce();
+    const img = String(chipProps().image ?? '');
+    expect(img.startsWith('data:image/svg+xml;base64,')).toBe(true);
+    expect(normalizeChipImage(SVG_TEXT)).toBe(img);
+  });
+
+  it('garbage in the image file never reaches the renderer', () => {
+    seedChipFileGroups();
+    useEditorStore.getState().addFileToGroup(chipFileGroupId(CHIP_ID), {
+      name: 'chip.png',
+      content: 'definitely not an image',
+    });
+    syncChipFilesOnce();
+    expect(chipProps().image ?? '').toBe('');
+  });
+
+  it('deleting the image file clears the property', () => {
+    seedStores({ image: PNG_URL });
+    seedChipFileGroups();
+    const f = imageFile()!;
+    useEditorStore.getState().removeFileFromGroup(chipFileGroupId(CHIP_ID), f.id);
+    syncChipFilesOnce();
+    expect(chipProps().image ?? '').toBe('');
+  });
+
+  it('both changed -> properties win, like every other chip file', () => {
+    seedStores({ image: PNG_URL });
+    seedChipFileGroups();
+    const f = imageFile()!;
+    useEditorStore.getState().setGroupFileContent(chipFileGroupId(CHIP_ID), f.id, SVG_TEXT);
+    const OTHER = 'data:image/jpeg;base64,/9j/4AA=';
+    seedStores({ image: OTHER });
+    syncChipFilesOnce();
+    expect(String(chipProps().image)).toBe(OTHER);
+    expect(imageFile()?.content).toBe(OTHER);
   });
 });

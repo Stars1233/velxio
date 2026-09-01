@@ -202,6 +202,9 @@ export class ComponentRegistry {
           { name: 'romBytes',    type: 'string', defaultValue: '' },
           { name: 'programFile', type: 'string', defaultValue: '' },
           { name: 'programTarget', type: 'string', defaultValue: '' },
+          // Optional face image (a data: URL). Projected into the chip's
+          // file section as chip.png / chip.jpg / chip.svg by chipFiles.ts.
+          { name: 'image', type: 'string', defaultValue: '' },
         ],
         defaultValues: {
           chipName: 'My Chip',
@@ -211,6 +214,7 @@ export class ComponentRegistry {
           romBytes: '',
           programFile: '',
           programTarget: '',
+          image: '',
         },
         pinCount: 0,
         tags: ['custom', 'chip', 'wasm', 'c', 'wokwi', 'eeprom', 'rtc', 'logic', 'cpu', '8080', 'z80'],

@@ -238,6 +238,26 @@ const IcoPencil = () => (
 // Integrated-circuit (chip) icon — a DIP package with pins. Marks a
 // programmable custom-chip's program section, distinct from board sections.
 /** Per-chip Compile button: hammer, spinner-ish while busy, red on error. */
+/** Picture-in-frame: set or replace the chip's optional face image. */
+const IcoChipImage = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="9" cy="9" r="2" />
+    <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21" />
+  </svg>
+);
+
+/** Picture-in-frame with a strike: remove the chip's face image. */
+const IcoChipImageRemove = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f87171"
+       strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <path d="m8 8 8 8" />
+    <path d="m16 8-8 8" />
+  </svg>
+);
+
 const IcoChipCompile = ({ state }: { state?: string }) => (
   <svg
     width="14"
@@ -527,6 +547,62 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
 
   // Per-chip Compile button state: chipId -> 'busy' | 'ok' | error string.
   const [chipCompileState, setChipCompileState] = useState<Record<string, string>>({});
+  /** The optional chip face image rides properties.image as a data URL and
+   *  is projected into the file section as chip.png/.jpg/.svg by
+   *  chipFiles.ts. One hidden input serves every chip section; the ref
+   *  remembers which chip asked. */
+  const chipImageInputRef = useRef<HTMLInputElement>(null);
+  const chipImageTargetRef = useRef<string | null>(null);
+
+  const pickChipImage = useCallback((chipId: string) => {
+    chipImageTargetRef.current = chipId;
+    chipImageInputRef.current?.click();
+  }, []);
+
+  const CHIP_IMAGE_MAX_BYTES = 256 * 1024;
+
+  const onChipImageChosen = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      const chipId = chipImageTargetRef.current;
+      chipImageTargetRef.current = null;
+      if (!file || !chipId) return;
+      if (!/^image\/(png|jpeg|svg\+xml)$/.test(file.type)) {
+        window.alert('Chip images must be PNG, JPEG or SVG.');
+        return;
+      }
+      if (file.size > CHIP_IMAGE_MAX_BYTES) {
+        // The image travels inside the project JSON (and to GitHub on every
+        // sync for linked projects), so it stays deliberately small.
+        window.alert('Chip images must be 256 KB or smaller.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = String(reader.result ?? '');
+        const comp = useSimulatorStore.getState().components.find((c) => c.id === chipId);
+        if (!comp || !dataUrl.startsWith('data:image/')) return;
+        updateComponent(chipId, {
+          properties: { ...comp.properties, image: dataUrl },
+        });
+        flushChipFileSync();
+      };
+      reader.readAsDataURL(file);
+    },
+    [updateComponent],
+  );
+
+  const removeChipImage = useCallback(
+    (chipId: string) => {
+      const comp = useSimulatorStore.getState().components.find((c) => c.id === chipId);
+      if (!comp) return;
+      updateComponent(chipId, { properties: { ...comp.properties, image: '' } });
+      flushChipFileSync();
+    },
+    [updateComponent],
+  );
+
   const compileChipNow = useCallback(async (chipId: string) => {
     setChipCompileState((s) => ({ ...s, [chipId]: 'busy' }));
     const r = await ensureChipWasm(chipId, (type, message) => {
@@ -831,6 +907,13 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
             accept={PROJECT_FILE_ACCEPT}
             onChange={handleProjectFilePicked}
             style={{ display: 'none' }}
+          />
+          <input
+            ref={chipImageInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/svg+xml"
+            style={{ display: 'none' }}
+            onChange={onChipImageChosen}
           />
           <button
             className={`file-explorer-save-btn${autoSave ? ` ${SAVE_STATUS_CLASS[autoSave.status]}` : ''}`}
@@ -1227,6 +1310,32 @@ export const FileExplorer: React.FC<FileExplorerProps> = ({ onSaveClick, onNewCl
                       >
                         <IcoChipCompile state={chipCompileState[chip.id]} />
                       </button>
+                      <button
+                        className="fe-board-new-btn"
+                        title={
+                          String((chip.properties as Record<string, unknown>)?.image ?? '')
+                            ? 'Replace the chip image (PNG, JPEG or SVG)'
+                            : 'Add a chip image (PNG, JPEG or SVG)'
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          pickChipImage(chip.id);
+                        }}
+                      >
+                        <IcoChipImage />
+                      </button>
+                      {String((chip.properties as Record<string, unknown>)?.image ?? '') !== '' && (
+                        <button
+                          className="fe-board-new-btn"
+                          title="Remove the chip image"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            removeChipImage(chip.id);
+                          }}
+                        >
+                          <IcoChipImageRemove />
+                        </button>
+                      )}
                       {chipActions.map((a) => (
                         <button
                           key={a.id}
