@@ -87,7 +87,7 @@ export const ProjectByIdPage: React.FC = () => {
       <div
         style={{
           minHeight: '100vh',
-          background: '#1e1e1e',
+          background: 'var(--wb-2)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
@@ -101,7 +101,7 @@ export const ProjectByIdPage: React.FC = () => {
               marginTop: 12,
               background: '#0e639c',
               border: 'none',
-              color: '#fff',
+              color: 'var(--color-fg-on-action)',
               padding: '8px 16px',
               borderRadius: 4,
               cursor: 'pointer',
@@ -119,13 +119,13 @@ export const ProjectByIdPage: React.FC = () => {
       <div
         style={{
           minHeight: '100vh',
-          background: '#1e1e1e',
+          background: 'var(--wb-2)',
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
         }}
       >
-        <p style={{ color: '#9d9d9d' }}>Loading project…</p>
+        <p style={{ color: 'var(--wb-11)' }}>Loading project…</p>
       </div>
     );
   }

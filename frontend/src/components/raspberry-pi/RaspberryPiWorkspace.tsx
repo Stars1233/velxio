@@ -190,7 +190,7 @@ export const RaspberryPiWorkspace: React.FC<RaspberryPiWorkspaceProps> = ({ boar
             <span
               style={{
                 ...styles.statusDot,
-                background: booted ? '#4caf50' : board?.running ? '#f59e0b' : '#6b7280',
+                background: booted ? '#4caf50' : board?.running ? '#f59e0b' : 'var(--wb-9)',
               }}
             />
             <span style={styles.statusLabel}>
@@ -212,7 +212,7 @@ export const RaspberryPiWorkspace: React.FC<RaspberryPiWorkspaceProps> = ({ boar
             ) : (
               <>
                 <button
-                  style={{ ...styles.toolbarBtn, color: bridgeConnected ? '#888' : '#4fc3f7' }}
+                  style={{ ...styles.toolbarBtn, color: bridgeConnected ? 'var(--wb-10)' : '#4fc3f7' }}
                   onClick={handleConnect}
                   title={t('editor.pi.connectTitle')}
                   disabled={bridgeConnected}
@@ -220,7 +220,7 @@ export const RaspberryPiWorkspace: React.FC<RaspberryPiWorkspaceProps> = ({ boar
                   {t('editor.pi.connect')}
                 </button>
                 <button
-                  style={{ ...styles.toolbarBtn, color: '#ef9a9a' }}
+                  style={{ ...styles.toolbarBtn, color: 'var(--color-feedback-error)' }}
                   onClick={handleDisconnect}
                   title={t('editor.pi.disconnectTitle')}
                   disabled={!bridgeConnected}
@@ -339,7 +339,7 @@ const styles: Record<string, React.CSSProperties> = {
     width: '100%',
     height: '100%',
     overflow: 'hidden',
-    background: '#1e1e1e',
+    background: 'var(--wb-2)',
   },
   sidebar: {
     width: 200,
@@ -347,7 +347,7 @@ const styles: Record<string, React.CSSProperties> = {
     maxWidth: 280,
     flexShrink: 0,
     overflow: 'hidden',
-    borderRight: '1px solid #333',
+    borderRight: '1px solid var(--wb-6)',
   },
   main: {
     flex: 1,
@@ -360,14 +360,14 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     alignItems: 'center',
     justifyContent: 'space-between',
-    background: '#252526',
-    borderBottom: '1px solid #333',
+    background: 'var(--wb-3)',
+    borderBottom: '1px solid var(--wb-6)',
     padding: '0 10px',
     height: 36,
     flexShrink: 0,
   },
   toolbarTitle: {
-    color: '#ef9a9a',
+    color: 'var(--color-feedback-error)',
     fontSize: 11,
     fontWeight: 700,
     fontFamily: 'Segoe UI, sans-serif',
@@ -378,7 +378,7 @@ const styles: Record<string, React.CSSProperties> = {
   },
   toolbarBtn: {
     background: 'none',
-    border: '1px solid #3c3c3c',
+    border: '1px solid var(--wb-7)',
     borderRadius: 4,
     cursor: 'pointer',
     fontSize: 11,
@@ -388,8 +388,8 @@ const styles: Record<string, React.CSSProperties> = {
   tabStrip: {
     display: 'flex',
     alignItems: 'center',
-    background: '#252526',
-    borderBottom: '1px solid #333',
+    background: 'var(--wb-3)',
+    borderBottom: '1px solid var(--wb-6)',
     minHeight: 30,
     flexShrink: 0,
     overflow: 'hidden',
@@ -398,7 +398,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'none',
     border: 'none',
     borderBottom: '2px solid transparent',
-    color: '#999',
+    color: 'var(--wb-11)',
     padding: '5px 12px',
     cursor: 'pointer',
     fontSize: 11,
@@ -410,8 +410,8 @@ const styles: Record<string, React.CSSProperties> = {
     whiteSpace: 'nowrap',
   },
   tabActive: {
-    borderBottomColor: '#ef9a9a',
-    color: '#ef9a9a',
+    borderBottomColor: 'var(--color-feedback-error)',
+    color: 'var(--color-feedback-error)',
     background: 'rgba(255,255,255,0.04)',
   },
   tabClose: {
@@ -430,7 +430,7 @@ const styles: Record<string, React.CSSProperties> = {
     position: 'relative',
   },
   loading: {
-    color: '#666',
+    color: 'var(--wb-9)',
     fontSize: 12,
     padding: 16,
     fontFamily: 'Segoe UI, sans-serif',
@@ -442,7 +442,7 @@ const styles: Record<string, React.CSSProperties> = {
     flexShrink: 0,
   },
   statusLabel: {
-    color: '#aaa',
+    color: 'var(--wb-11)',
     fontSize: 11,
     fontFamily: 'Segoe UI, sans-serif',
     marginRight: 6,
@@ -462,14 +462,14 @@ const styles: Record<string, React.CSSProperties> = {
     alignItems: 'center',
     gap: 12,
     padding: '36px 40px',
-    background: '#1e1e1e',
-    border: '1px solid #444',
+    background: 'var(--wb-2)',
+    border: '1px solid var(--wb-7)',
     borderRadius: 10,
     maxWidth: 360,
     textAlign: 'center' as const,
   },
   offlineIcon: {
-    color: '#7a8290',
+    color: 'var(--wb-10)',
     lineHeight: 0,
     marginBottom: 2,
   },
@@ -478,19 +478,19 @@ const styles: Record<string, React.CSSProperties> = {
     marginBottom: 2,
   },
   offlineTitle: {
-    color: '#ef9a9a',
+    color: 'var(--color-feedback-error)',
     fontSize: 15,
     fontWeight: 700,
     fontFamily: 'Segoe UI, sans-serif',
   },
   offlineSubtitle: {
-    color: '#aaa',
+    color: 'var(--wb-11)',
     fontSize: 12,
     fontFamily: 'Segoe UI, sans-serif',
     lineHeight: 1.5,
   },
   startBtn: {
-    background: '#1b5e20',
+    background: 'var(--color-feedback-success-soft)',
     border: '1px solid #4caf50',
     borderRadius: 6,
     color: '#4caf50',
@@ -502,7 +502,7 @@ const styles: Record<string, React.CSSProperties> = {
     marginTop: 4,
   },
   offlineNote: {
-    color: '#666',
+    color: 'var(--wb-9)',
     fontSize: 10,
     fontFamily: 'Segoe UI, sans-serif',
     lineHeight: 1.5,

@@ -62,9 +62,9 @@ const resizeHandleStyle: React.CSSProperties = {
   height: 5,
   flexShrink: 0,
   cursor: 'row-resize',
-  background: '#2a2d2e',
-  borderTop: '1px solid #3c3c3c',
-  borderBottom: '1px solid #3c3c3c',
+  background: 'var(--wb-5)',
+  borderTop: '1px solid var(--wb-7)',
+  borderBottom: '1px solid var(--wb-7)',
 };
 
 export const EditorPage: React.FC = () => {
@@ -465,8 +465,8 @@ export const EditorPage: React.FC = () => {
               // this block to a third of its width and clip two of them.
               flexShrink: 0,
               gap: 1,
-              background: '#252526',
-              border: '1px solid #3c3c3c',
+              background: 'var(--wb-3)',
+              border: '1px solid var(--wb-7)',
               borderRadius: 4,
               overflow: 'hidden',
               alignSelf: 'center',
@@ -479,7 +479,7 @@ export const EditorPage: React.FC = () => {
               title={explorerOpen ? t('editor.menu.hideExplorer', 'Hide file explorer') : t('editor.menu.showExplorer', 'Show file explorer')}
               style={{
                 background: explorerOpen ? 'var(--color-action-primary)' : 'transparent',
-                color: explorerOpen ? 'white' : '#aaa',
+                color: explorerOpen ? 'white' : 'var(--wb-11)',
                 border: 'none',
                 height: 28,
                 padding: '0 10px',
@@ -501,7 +501,7 @@ export const EditorPage: React.FC = () => {
                 <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
               </svg>
             </button>
-            <div style={{ width: 1, background: '#3c3c3c', alignSelf: 'stretch' }} />
+            <div style={{ width: 1, background: 'var(--wb-7)', alignSelf: 'stretch' }} />
             {(
               [
                 { key: 'code', label: t('editor.shell.code'), path: 'M16 18l6-6-6-6M8 6l-6 6 6 6' },
@@ -515,7 +515,7 @@ export const EditorPage: React.FC = () => {
                 aria-pressed={viewMode === m.key}
                 style={{
                   background: viewMode === m.key ? 'var(--color-action-primary)' : 'transparent',
-                  color: viewMode === m.key ? 'white' : '#aaa',
+                  color: viewMode === m.key ? 'white' : 'var(--wb-11)',
                   border: 'none',
                   height: 28,
                   padding: '0 10px',

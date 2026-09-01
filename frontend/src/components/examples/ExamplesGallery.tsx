@@ -31,23 +31,23 @@ interface BoardTab {
 }
 
 const BOARD_TABS: BoardTab[] = [
-  { id: 'all', label: 'All', color: '#ffffff', bg: '#444444' },
-  { id: 'retro', label: 'Retro', color: '#1a1a1a', bg: '#e0a82e' },
-  { id: 'arduino-uno', label: 'Arduino Uno', color: '#ffffff', bg: '#007acc' },
-  { id: 'arduino-nano', label: 'Arduino Nano', color: '#ffffff', bg: '#0055aa' },
-  { id: 'arduino-mega', label: 'Arduino Mega', color: '#ffffff', bg: '#003388' },
-  { id: 'raspberry-pi-pico', label: 'Pico', color: '#ffffff', bg: '#c11c31' },
-  { id: 'pi-pico-w', label: 'Pico W (Wi-Fi)', color: '#ffffff', bg: '#8c0e1e' },
-  { id: 'esp32', label: 'ESP32 (Xtensa)', color: '#ffffff', bg: '#e77d11' },
-  { id: 'esp32-cam', label: 'ESP32-CAM', color: '#ffffff', bg: '#d35400' },
-  { id: 'esp32-s3', label: 'ESP32-S3 (Xtensa)', color: '#ffffff', bg: '#b3540e' },
-  { id: 'esp32-c3', label: 'ESP32-C3 (RISC-V)', color: '#ffffff', bg: '#27ae60' },
-  { id: 'stm32-bluepill', label: 'STM32 Blue Pill', color: '#ffffff', bg: '#0a7ea4' },
-  { id: 'stm32-blackpill', label: 'STM32 Black Pill', color: '#ffffff', bg: '#2d3436' },
-  { id: 'attiny85', label: 'ATtiny85', color: '#ffffff', bg: '#5d4037' },
-  { id: 'multi', label: 'Multi-Board', color: '#ffffff', bg: '#7b2d8b' },
-  { id: 'analog', label: 'Analog', color: '#ffffff', bg: '#0ea5a5' },
-  { id: 'digital', label: 'Digital', color: '#ffffff', bg: '#6366f1' },
+  { id: 'all', label: 'All', color: 'var(--wb-13)', bg: 'var(--wb-7)' },
+  { id: 'retro', label: 'Retro', color: 'var(--wb-1)', bg: '#e0a82e' },
+  { id: 'arduino-uno', label: 'Arduino Uno', color: 'var(--wb-13)', bg: '#007acc' },
+  { id: 'arduino-nano', label: 'Arduino Nano', color: 'var(--wb-13)', bg: '#0055aa' },
+  { id: 'arduino-mega', label: 'Arduino Mega', color: 'var(--wb-13)', bg: '#003388' },
+  { id: 'raspberry-pi-pico', label: 'Pico', color: 'var(--wb-13)', bg: '#c11c31' },
+  { id: 'pi-pico-w', label: 'Pico W (Wi-Fi)', color: 'var(--wb-13)', bg: '#8c0e1e' },
+  { id: 'esp32', label: 'ESP32 (Xtensa)', color: 'var(--wb-13)', bg: '#e77d11' },
+  { id: 'esp32-cam', label: 'ESP32-CAM', color: 'var(--wb-13)', bg: '#d35400' },
+  { id: 'esp32-s3', label: 'ESP32-S3 (Xtensa)', color: 'var(--wb-13)', bg: '#b3540e' },
+  { id: 'esp32-c3', label: 'ESP32-C3 (RISC-V)', color: 'var(--wb-13)', bg: '#27ae60' },
+  { id: 'stm32-bluepill', label: 'STM32 Blue Pill', color: 'var(--wb-13)', bg: '#0a7ea4' },
+  { id: 'stm32-blackpill', label: 'STM32 Black Pill', color: 'var(--wb-13)', bg: 'var(--wb-6)' },
+  { id: 'attiny85', label: 'ATtiny85', color: 'var(--wb-13)', bg: 'var(--color-feedback-error-soft)' },
+  { id: 'multi', label: 'Multi-Board', color: 'var(--wb-13)', bg: '#7b2d8b' },
+  { id: 'analog', label: 'Analog', color: 'var(--wb-13)', bg: '#0ea5a5' },
+  { id: 'digital', label: 'Digital', color: 'var(--wb-13)', bg: 'var(--color-accent-fg)' },
 ];
 
 /** The "Retro" tab is tag-based (not board-kind based) so it can collect the
@@ -99,8 +99,8 @@ export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample 
       extra.push({
         id: bf,
         label: (BOARD_KIND_LABELS as Record<string, string>)[bf] ?? bf,
-        color: '#ffffff',
-        bg: '#4a5568',
+        color: 'var(--wb-13)',
+        bg: 'var(--color-accent-soft)',
       });
     }
     extra.sort((a, b) => a.label.localeCompare(b.label));
@@ -249,7 +249,7 @@ export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample 
     ({
       beginner: '#4ade80',
       intermediate: '#fbbf24',
-      advanced: '#f87171',
+      advanced: 'var(--color-feedback-error)',
     })[difficulty];
 
   const getBoardBadge = (
@@ -441,7 +441,7 @@ export const ExamplesGallery: React.FC<ExamplesGalleryProps> = ({ onLoadExample 
                   example={example}
                   width={300}
                   height={180}
-                  background="#0a0a0c"
+                  background="var(--wb-0)"
                   style={{ width: '100%', height: '100%' }}
                 />
               </div>
