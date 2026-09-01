@@ -48,6 +48,8 @@ import {
   normalizeWireWaypoints,
   previewElbow,
 } from '../utils/wireUtils';
+import { computeWireSplit } from '../utils/wireSplit';
+import { generateUUID } from '../utils/uuid';
 import {
   routeAroundObstacles,
   collectComponentObstacles,
@@ -1181,6 +1183,22 @@ interface SimulatorState {
   wireInProgress: WireInProgress | null;
   addWire: (wire: Wire) => void;
   removeWire: (wireId: string) => void;
+  /**
+   * Drop a junction node onto `wireId` at (x, y), splitting it in two, and
+   * optionally land the wire currently being drawn on the new node.
+   *
+   * The whole gesture is ONE undo command: Ctrl+Z restores the original wire
+   * and removes the node, rather than leaving the user to unpick a half-split
+   * circuit. Returns the junction's component id, or null when the point is
+   * not actually on the wire (the caller then treats the click normally).
+   */
+  splitWireWithJunction: (
+    wireId: string,
+    x: number,
+    y: number,
+    threshold: number,
+    opts?: { finishWireInProgress?: boolean },
+  ) => string | null;
   updateWire: (wireId: string, updates: Partial<Wire>) => void;
   setSelectedWire: (wireId: string | null) => void;
   setWires: (wires: Wire[]) => void;
@@ -3289,6 +3307,76 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
     },
 
     addWire: (wire) => set((state) => ({ wires: [...state.wires, wire] })),
+
+    splitWireWithJunction: (wireId, x, y, threshold, opts) => {
+      const state = get();
+      const original = state.wires.find((w) => w.id === wireId);
+      if (!original) return null;
+
+      const split = computeWireSplit(original, x, y, threshold);
+      if (!split) return null;
+
+      // The wire being drawn, if the caller wants it landed on the new node.
+      // Captured BEFORE the command runs so undo can put it back.
+      const wip = opts?.finishWireInProgress ? state.wireInProgress : null;
+      let closing: Wire | null = null;
+      if (wip) {
+        const last = wip.waypoints.length
+          ? wip.waypoints[wip.waypoints.length - 1]
+          : { x: wip.startEndpoint.x, y: wip.startEndpoint.y };
+        const elbow = previewElbow(last, split.endpoint.x, split.endpoint.y);
+        closing = {
+          id: `wire-${generateUUID()}`,
+          start: wip.startEndpoint,
+          end: split.endpoint,
+          waypoints: normalizeWireWaypoints(
+            { x: wip.startEndpoint.x, y: wip.startEndpoint.y },
+            elbow ? [...wip.waypoints, elbow] : wip.waypoints,
+            { x: split.endpoint.x, y: split.endpoint.y },
+          ),
+          color: wip.color,
+          autoRouted: false,
+        };
+      }
+
+      const junction = split.junction as Component;
+      get().pushCommand({
+        description: 'Add wire junction',
+        execute: () =>
+          set((s2) => ({
+            components: [...s2.components, junction],
+            wires: [
+              ...s2.wires.filter((w) => w.id !== original.id),
+              split.wireA,
+              split.wireB,
+              ...(closing ? [closing] : []),
+            ],
+            wireInProgress: closing ? null : s2.wireInProgress,
+          })),
+        undo: () =>
+          set((s2) => ({
+            components: s2.components.filter((c) => c.id !== junction.id),
+            wires: [
+              ...s2.wires.filter(
+                (w) =>
+                  w.id !== split.wireA.id &&
+                  w.id !== split.wireB.id &&
+                  (!closing || w.id !== closing.id),
+              ),
+              original,
+            ],
+          })),
+      });
+
+      // The stored endpoint coords are exact by construction, but the node's
+      // pinInfo only becomes readable once its element mounts — re-stamp then
+      // so a later component move keeps every attached wire on the dot.
+      const recalc = () => get().updateWirePositions(junction.id);
+      if (typeof requestAnimationFrame === 'function') requestAnimationFrame(recalc);
+      else recalc();
+
+      return junction.id;
+    },
 
     removeWire: (wireId) =>
       set((state) => ({

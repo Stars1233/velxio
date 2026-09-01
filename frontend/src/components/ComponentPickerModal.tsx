@@ -116,6 +116,15 @@ const BOARD_DESCRIPTIONS: Record<BoardKind, string> = {
 const UNSIMULATED_BOARD_SHELLS = new Set(['nano-rp2040-connect']);
 
 /**
+ * Parts created only by canvas gestures, never placed from the picker. The
+ * junction node is minted by dropping a wire-end onto a wire (or the node
+ * tool); a bare junction on empty canvas connects nothing, so offering it
+ * here would only confuse. Metadata registration stays mandatory — the
+ * canvas renders null for unknown metadataIds — hiding happens HERE only.
+ */
+const GESTURE_ONLY_COMPONENTS = new Set(['junction']);
+
+/**
  * Maker-first category order for the picker grid and the category filter.
  * Velxio's audience is hobbyist-heavy: everyday digital parts (sensors,
  * LEDs/outputs, displays, buttons) lead, while diodes/resistors/capacitors
@@ -283,6 +292,7 @@ export const ComponentPickerModal: React.FC<ComponentPickerModalProps> = ({
     // support we don't have. Filtered here rather than removed from the
     // metadata: saved projects that already placed one must keep rendering.
     components = components.filter((c) => !UNSIMULATED_BOARD_SHELLS.has(c.id));
+    components = components.filter((c) => !GESTURE_ONLY_COMPONENTS.has(c.id));
 
     // Maker-first ordering: most users reach for a sensor, an LED or a
     // display far more often than a bare transistor or a 74HC gate, so

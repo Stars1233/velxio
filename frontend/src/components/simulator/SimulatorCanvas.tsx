@@ -220,6 +220,7 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
   const startWireCreation = useSimulatorStore((s) => s.startWireCreation);
   const updateWireInProgress = useSimulatorStore((s) => s.updateWireInProgress);
   const addWireWaypoint = useSimulatorStore((s) => s.addWireWaypoint);
+  const splitWireWithJunction = useSimulatorStore((s) => s.splitWireWithJunction);
   const setWireInProgressColor = useSimulatorStore((s) => s.setWireInProgressColor);
   const finishWireCreation = useSimulatorStore((s) => s.finishWireCreation);
   const cancelWireCreation = useSimulatorStore((s) => s.cancelWireCreation);
@@ -360,11 +361,16 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
     x: number;
     y: number;
   } | null>(null);
-  // Right-click context menu for a wire (color swatches + delete).
+  // Right-click context menu for a wire (add node + color swatches + delete).
   const [wireContextMenu, setWireContextMenu] = useState<{
     wireId: string;
+    /** Screen coords — where the menu paints. */
     x: number;
     y: number;
+    /** World coords of the same click, so "Add node here" drops the node
+     *  exactly under the cursor instead of at some default point. */
+    worldX: number;
+    worldY: number;
   } | null>(null);
   // Board removal confirmation dialog
   const [boardToRemove, setBoardToRemove] = useState<string | null>(null);
@@ -3159,12 +3165,46 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
             const wire = findWireNearPoint(wiresRef.current, world.x, world.y, threshold);
             if (wire) {
               setSelectedWire(wire.id);
-              setWireContextMenu({ wireId: wire.id, x: e.clientX, y: e.clientY });
+              setWireContextMenu({
+                wireId: wire.id,
+                x: e.clientX,
+                y: e.clientY,
+                worldX: world.x,
+                worldY: world.y,
+              });
             }
           }}
           onClick={(e) => {
             if (wireInProgress) {
               const world = toWorld(e.clientX, e.clientY);
+              const threshold = 8 / zoomRef.current;
+              // Dropping the wire END onto another wire joins the two through a
+              // junction node: the wire underneath is split at the click and
+              // all three legs meet on the node's single pin. This is what lets
+              // a shared rail be ONE wire with taps instead of a star of wires
+              // back to the board.
+              //
+              // Wires touching the pin this wire started from are excluded — a
+              // click near your own origin means "place a waypoint", never
+              // "tap the wire I am leaving".
+              const startId = wireInProgress.startEndpoint.componentId;
+              const startPin = wireInProgress.startEndpoint.pinName;
+              const candidates = wiresRef.current.filter(
+                (w) =>
+                  !(w.start.componentId === startId && w.start.pinName === startPin) &&
+                  !(w.end.componentId === startId && w.end.pinName === startPin),
+              );
+              const target = findWireNearPoint(candidates, world.x, world.y, threshold);
+              if (target) {
+                const nodeId = splitWireWithJunction(
+                  target.id, world.x, world.y, threshold,
+                  { finishWireInProgress: true },
+                );
+                // A null result means the click landed on the wire's own
+                // endpoint (a degenerate zero-length split) — fall through and
+                // treat it as an ordinary waypoint.
+                if (nodeId) return;
+              }
               addWireWaypoint(world.x, world.y);
               return;
             }
@@ -3825,6 +3865,59 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
                   fontSize: 13,
                 }}
               >
+                {/* Add node — first, and the reason the discoverability of the
+                    toolbar tool alone was not enough: right-clicking the wire
+                    is where people actually look for "do something to this
+                    wire", and the click position is already the drop point. */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    splitWireWithJunction(
+                      wireContextMenu.wireId,
+                      wireContextMenu.worldX,
+                      wireContextMenu.worldY,
+                      8 / zoomRef.current,
+                    );
+                    setSelectedWire(null);
+                    setWireContextMenu(null);
+                  }}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    width: '100%',
+                    marginBottom: 8,
+                    padding: '7px 6px',
+                    background: 'none',
+                    border: 'none',
+                    borderBottom: '1px solid #3c3c3c',
+                    color: '#e6e6e6',
+                    cursor: 'pointer',
+                    fontSize: 13,
+                    textAlign: 'left',
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = '#2a2d2e';
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = 'none';
+                  }}
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                  >
+                    <path d="M2 12h20M12 12v10" />
+                    <circle cx="12" cy="12" r="3.2" fill="currentColor" stroke="none" />
+                  </svg>
+                  {t('editor.canvas.addNodeHere', 'Add node here')}
+                </button>
+
                 <div style={{ padding: '2px 4px 8px', color: '#888', fontSize: 11 }}>
                   {t('editor.selectionBar.changeColor')}
                 </div>

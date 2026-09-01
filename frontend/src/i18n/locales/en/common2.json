@@ -179,7 +179,8 @@
         "ready": "Flash the compiled sketch to a real USB-attached board",
         "willCompile": "Compile the sketch and flash it to a real USB-attached board"
       },
-      "wifiPanel": "WiFi panel"
+      "wifiPanel": "WiFi panel",
+      "addNodeHere": "Add node here"
     },
     "componentPicker": {
       "title": "Add Component",
