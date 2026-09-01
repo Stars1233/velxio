@@ -42,7 +42,9 @@
       "shareLabel": "Share / Embed",
       "githubSyncLabel": "Sync to GitHub",
       "uploadFirmwareLabel": "Upload firmware",
-      "recordLabel": "Record simulation"
+      "recordLabel": "Record simulation",
+      "themeToLight": "Switch to light theme",
+      "themeToDark": "Switch to dark theme"
     },
     "fileExplorer": {
       "workspace": "WORKSPACE",
@@ -432,7 +434,11 @@
       "compile": "Compile",
       "run": "Run",
       "hideExplorer": "Hide file explorer",
-      "showExplorer": "Show file explorer"
+      "showExplorer": "Show file explorer",
+      "appearance": "Appearance",
+      "themeDark": "Dark",
+      "themeLight": "Light",
+      "themeSystem": "Match system"
     },
     "inspector": {
       "propertiesTab": "Properties",

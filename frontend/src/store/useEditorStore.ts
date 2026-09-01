@@ -149,7 +149,6 @@ interface EditorState {
    *  libraries.json entry; the Library Manager modal is what edits the manifest. */
   manifestViewBoardId: string | null;
   setManifestView: (boardId: string | null) => void;
-  theme: 'vs-dark' | 'light';
   fontSize: number;
   viewMode: EditorViewMode;
   setViewMode: (mode: EditorViewMode) => void;
@@ -227,8 +226,9 @@ interface EditorState {
     folders?: Record<string, string[]>,
   ) => void;
 
-  // Settings
-  setTheme: (theme: 'vs-dark' | 'light') => void;
+  // Settings.
+  // Light/dark is NOT here: it is a whole-app preference shared with the
+  // blog and the docs portal, so it lives in src/lib/theme.ts.
   setFontSize: (size: number) => void;
 
   // Dirty flag — tracks whether code changed since last compilation
@@ -245,7 +245,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
   openFileIds: [MAIN_ID],
   manifestViewBoardId: null,
   setManifestView: (boardId: string | null) => set({ manifestViewBoardId: boardId }),
-  theme: 'vs-dark',
   fontSize: 14,
   viewMode: 'both',
   setViewMode: (mode) => set({ viewMode: mode }),
@@ -671,7 +670,6 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
   // ── Settings ──────────────────────────────────────────────────────────────
 
-  setTheme: (theme) => set({ theme }),
   setFontSize: (fontSize) => set({ fontSize }),
 
   // Legacy: sets content of active file

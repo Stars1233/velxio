@@ -40,7 +40,9 @@
       "shareLabel": "Поделиться / Встроить",
       "githubSyncLabel": "Синхронизировать с GitHub",
       "uploadFirmwareLabel": "Загрузить прошивку",
-      "recordLabel": "Записать симуляцию"
+      "recordLabel": "Записать симуляцию",
+      "themeToLight": "Switch to light theme",
+      "themeToDark": "Switch to dark theme"
     },
     "fileExplorer": {
       "workspace": "РАБОЧАЯ ОБЛАСТЬ",
@@ -399,7 +401,11 @@
       "compile": "Компилировать",
       "run": "Запустить",
       "hideExplorer": "Скрыть проводник файлов",
-      "showExplorer": "Показать проводник файлов"
+      "showExplorer": "Показать проводник файлов",
+      "appearance": "Appearance",
+      "themeDark": "Dark",
+      "themeLight": "Light",
+      "themeSystem": "Match system"
     },
     "inspector": {
       "propertiesTab": "Свойства",

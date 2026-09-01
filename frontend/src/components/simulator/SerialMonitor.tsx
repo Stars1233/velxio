@@ -199,7 +199,7 @@ export const SerialMonitor: React.FC = () => {
       <div style={styles.tabStrip}>
         {boards.map((board) => {
           const isActive = board.id === resolvedTabId;
-          const color = BOARD_COLOR[board.boardKind] ?? '#999';
+          const color = BOARD_COLOR[board.boardKind] ?? 'var(--wb-10)';
           const hasUnread = board.serialOutput.length > (lastSeenLen[board.id] ?? 0);
           return (
             <button
@@ -211,7 +211,7 @@ export const SerialMonitor: React.FC = () => {
               onClick={() => handleTabClick(board.id)}
               title={boardDisplayName(board)}
             >
-              <span style={{ fontSize: 9, marginRight: 3, color: isActive ? color : '#888' }}>
+              <span style={{ fontSize: 9, marginRight: 3, color: isActive ? color : 'var(--wb-10)' }}>
                 {BOARD_ICON[board.boardKind] ?? '●'}
               </span>
               {board.name?.trim() || BOARD_SHORT_LABEL[board.boardKind] || board.boardKind}
@@ -415,8 +415,8 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     flexDirection: 'column',
     height: '100%',
-    background: '#1e1e1e',
-    borderTop: '1px solid #333',
+    background: 'var(--wb-2)',
+    borderTop: '1px solid var(--wb-6)',
     fontFamily: 'monospace',
     fontSize: 13,
     minHeight: 0,
@@ -424,8 +424,8 @@ const styles: Record<string, React.CSSProperties> = {
   tabStrip: {
     display: 'flex',
     alignItems: 'center',
-    background: '#252526',
-    borderBottom: '1px solid #333',
+    background: 'var(--wb-3)',
+    borderBottom: '1px solid var(--wb-6)',
     minHeight: 32,
     flexShrink: 0,
     overflow: 'hidden',
@@ -434,7 +434,7 @@ const styles: Record<string, React.CSSProperties> = {
     background: 'none',
     border: 'none',
     borderBottom: '2px solid transparent',
-    color: '#999',
+    color: 'var(--wb-10)',
     padding: '5px 12px',
     cursor: 'pointer',
     fontSize: 11,
@@ -466,21 +466,21 @@ const styles: Record<string, React.CSSProperties> = {
     marginLeft: 3,
   },
   title: {
-    color: '#cccccc',
+    color: 'var(--wb-12)',
     fontWeight: 600,
     fontSize: 12,
   },
   baudRate: {
-    color: '#569cd6',
+    color: 'var(--color-accent-fg)',
     fontSize: 11,
     fontFamily: 'monospace',
-    background: '#1e1e1e',
-    border: '1px solid #3a3a3a',
+    background: 'var(--wb-2)',
+    border: '1px solid var(--wb-6)',
     borderRadius: 3,
     padding: '1px 6px',
   },
   autoscrollLabel: {
-    color: '#999',
+    color: 'var(--wb-10)',
     fontSize: 11,
     display: 'flex',
     alignItems: 'center',
@@ -493,8 +493,8 @@ const styles: Record<string, React.CSSProperties> = {
   },
   clearBtn: {
     background: 'transparent',
-    border: '1px solid #555',
-    color: '#ccc',
+    border: '1px solid var(--wb-8)',
+    color: 'var(--wb-12)',
     padding: '2px 8px',
     borderRadius: 3,
     cursor: 'pointer',
@@ -504,8 +504,8 @@ const styles: Record<string, React.CSSProperties> = {
     flex: 1,
     margin: 0,
     padding: 8,
-    color: '#00ff41',
-    background: '#0a0a0a',
+    color: 'var(--color-terminal-fg)',
+    background: 'var(--color-terminal-bg)',
     overflowY: 'auto',
     whiteSpace: 'pre-wrap',
     wordBreak: 'break-all',
@@ -517,15 +517,15 @@ const styles: Record<string, React.CSSProperties> = {
     display: 'flex',
     gap: 4,
     padding: 4,
-    background: '#252526',
-    borderTop: '1px solid #333',
+    background: 'var(--wb-3)',
+    borderTop: '1px solid var(--wb-6)',
     flexShrink: 0,
   },
   input: {
     flex: 1,
-    background: '#1e1e1e',
-    border: '1px solid #444',
-    color: '#ccc',
+    background: 'var(--wb-2)',
+    border: '1px solid var(--wb-7)',
+    color: 'var(--wb-12)',
     padding: '4px 8px',
     borderRadius: 3,
     fontFamily: 'monospace',
@@ -533,18 +533,18 @@ const styles: Record<string, React.CSSProperties> = {
     outline: 'none',
   },
   select: {
-    background: '#1e1e1e',
-    border: '1px solid #444',
-    color: '#ccc',
+    background: 'var(--wb-2)',
+    border: '1px solid var(--wb-7)',
+    color: 'var(--wb-12)',
     padding: '4px',
     borderRadius: 3,
     fontSize: 11,
     outline: 'none',
   },
   sendBtn: {
-    background: '#0e639c',
+    background: 'var(--color-action-primary)',
     border: 'none',
-    color: '#fff',
+    color: 'var(--color-fg-on-action)',
     padding: '4px 12px',
     borderRadius: 3,
     cursor: 'pointer',

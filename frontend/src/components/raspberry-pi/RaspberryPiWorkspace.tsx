@@ -14,6 +14,8 @@ import { useVfsStore } from '../../store/useVfsStore';
 import { getBoardBridge, useSimulatorStore } from '../../store/useSimulatorStore';
 import { attachSlavesFromCanvas } from '../../simulation/piSlaveScanner';
 import { boardDisplayName } from '../../types/board';
+import { defineVelxioThemes, monacoThemeFor } from '../editor/monacoThemes';
+import { useResolvedTheme } from '../../hooks/useTheme';
 
 // Lazy-load PiTerminal so @xterm/xterm is only bundled when needed
 const PiTerminal = lazy(() => import('./PiTerminal').then((m) => ({ default: m.PiTerminal })));
@@ -66,6 +68,7 @@ export const RaspberryPiWorkspace: React.FC<RaspberryPiWorkspaceProps> = ({ boar
   const [activePane, setActivePane] = useState<'terminal' | string>('terminal'); // string = nodeId
   const [openFiles, setOpenFiles] = useState<OpenFile[]>([]);
   const [bridgeConnected, setBridgeConnected] = useState(false);
+  const monacoTheme = monacoThemeFor(useResolvedTheme());
 
   const board = useSimulatorStore((s) => s.boards.find((b) => b.id === boardId));
   const startBoard = useSimulatorStore((s) => s.startBoard);
@@ -309,7 +312,8 @@ export const RaspberryPiWorkspace: React.FC<RaspberryPiWorkspaceProps> = ({ boar
               key={activePane}
               height="100%"
               language={activeFileNode.name.endsWith('.py') ? 'python' : 'shell'}
-              theme="vs-dark"
+              theme={monacoTheme}
+              beforeMount={defineVelxioThemes}
               value={activeFileNode.content ?? ''}
               onChange={(val) => setContent(boardId, activePane, val ?? '')}
               options={{

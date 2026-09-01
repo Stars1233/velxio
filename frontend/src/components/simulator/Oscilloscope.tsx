@@ -12,6 +12,8 @@
  */
 
 import React, { useRef, useEffect, useState, useCallback, useLayoutEffect } from 'react';
+import { cssVar } from '../../lib/theme';
+import { useResolvedTheme } from '../../hooks/useTheme';
 import ReactDOM from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -84,6 +86,26 @@ function getPinsForBoardKind(boardKind: BoardKind): { pin: number; label: string
 
 // ── Canvas rendering helpers ────────────────────────────────────────────────
 
+/** Chrome colours for the scope's 2D canvases.
+ *
+ * A canvas cannot inherit a CSS custom property, so the grid, the axes and
+ * the trigger cursor read their values from the token layer at draw time.
+ * The channel TRACE colour is not in here on purpose — it comes from the
+ * channel's own configuration and identifies the signal, so it stays put
+ * across themes the way a probe's clip colour does.
+ */
+function scopeChrome() {
+  return {
+    grid: cssVar('--wb-2'),
+    centre: cssVar('--wb-4'),
+    zero: cssVar('--color-border-strong'),
+    axisText: cssVar('--wb-10'),
+    rulerLine: cssVar('--wb-7'),
+    rulerText: cssVar('--wb-10'),
+    trigger: cssVar('--color-feedback-warning'),
+  };
+}
+
 function drawWaveform(
   canvas: HTMLCanvasElement,
   samples: OscSample[],
@@ -103,8 +125,10 @@ function drawWaveform(
 
   ctx.clearRect(0, 0, width, height);
 
+  const chrome = scopeChrome();
+
   // Background grid lines
-  ctx.strokeStyle = '#1e1e1e';
+  ctx.strokeStyle = chrome.grid;
   ctx.lineWidth = 1;
   for (let d = 0; d <= NUM_DIVS; d++) {
     const x = Math.round((d / NUM_DIVS) * width);
@@ -115,7 +139,7 @@ function drawWaveform(
   }
 
   // Horizontal center guide
-  ctx.strokeStyle = '#2a2a2a';
+  ctx.strokeStyle = chrome.centre;
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(0, height / 2);
@@ -125,7 +149,7 @@ function drawWaveform(
   // Trigger marker — drawn under the trace so the waveform sits on top.
   if (triggerXFrac !== null) {
     const x = Math.round(triggerXFrac * width);
-    ctx.strokeStyle = '#ff9800';
+    ctx.strokeStyle = chrome.trigger;
     ctx.lineWidth = 1;
     ctx.setLineDash([4, 3]);
     ctx.beginPath();
@@ -133,7 +157,7 @@ function drawWaveform(
     ctx.lineTo(x, height);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = '#ff9800';
+    ctx.fillStyle = chrome.trigger;
     ctx.font = 'bold 9px monospace';
     ctx.fillText('T', x + 2, 10);
   }
@@ -208,6 +232,7 @@ function drawAnalogWaveform(
   const { width, height } = canvas.getBoundingClientRect();
   if (samples.length === 0) return;
 
+  const chrome = scopeChrome();
   const windowStartMs = windowEndMs - windowMs;
   const toX = (t: number) => ((t - windowStartMs) / windowMs) * width;
   const spanV = voltsPerDiv * NUM_V_DIVS;
@@ -217,7 +242,7 @@ function drawAnalogWaveform(
   // Zero-volt reference, so the reader can see where ground sits.
   const zeroY = toY(0);
   if (zeroY > 0 && zeroY < height) {
-    ctx.strokeStyle = 'rgba(255,255,255,0.12)';
+    ctx.strokeStyle = chrome.zero;
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 3]);
     ctx.beginPath();
@@ -267,7 +292,7 @@ function drawAnalogWaveform(
   if (started) ctx.stroke();
 
   // Volts axis: the top and bottom of the visible span, plus the centre.
-  ctx.fillStyle = 'rgba(255,255,255,0.45)';
+  ctx.fillStyle = chrome.axisText;
   ctx.font = '9px monospace';
   const fmt = (v: number) => (Math.abs(v) >= 10 ? v.toFixed(0) : v.toFixed(1));
   ctx.fillText(`${fmt(yOffsetV + spanV / 2)}V`, 2, 9);
@@ -286,8 +311,9 @@ function drawRuler(
   if (!ctx) return;
 
   ctx.clearRect(0, 0, width, height);
-  ctx.strokeStyle = '#444';
-  ctx.fillStyle = '#888';
+  const chrome = scopeChrome();
+  ctx.strokeStyle = chrome.rulerLine;
+  ctx.fillStyle = chrome.rulerText;
   ctx.font = '9px monospace';
   ctx.lineWidth = 1;
 
@@ -335,6 +361,7 @@ const ChannelCanvas: React.FC<ChannelCanvasProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const theme = useResolvedTheme();
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -360,10 +387,14 @@ const ChannelCanvas: React.FC<ChannelCanvasProps> = ({
     } else {
       drawWaveform(canvas, samples, channel.color, windowEndMs, windowMs, triggerXFrac);
     }
+    // `theme` is not read inside the effect — scopeChrome() picks the new
+    // values up on its own — but it belongs in the deps so a stopped scope
+    // still repaints its grid when the user switches appearance.
   }, [
     samples, channel.color, channel.kind, windowEndMs, windowMs, triggerXFrac,
     channel.kind === 'analog' ? channel.voltsPerDiv : 0,
     channel.kind === 'analog' ? channel.yOffsetV : 0,
+    theme,
   ]);
 
   return (
@@ -384,6 +415,7 @@ interface RulerCanvasProps {
 const RulerCanvas: React.FC<RulerCanvasProps> = ({ windowEndMs, windowMs, timeDivMs }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
+  const theme = useResolvedTheme();
 
   useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -398,7 +430,7 @@ const RulerCanvas: React.FC<RulerCanvasProps> = ({ windowEndMs, windowMs, timeDi
     const ctx = canvas.getContext('2d');
     if (ctx) ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
     drawRuler(canvas, windowEndMs, windowMs, timeDivMs);
-  }, [windowEndMs, windowMs, timeDivMs]);
+  }, [windowEndMs, windowMs, timeDivMs, theme]);
 
   return (
     <div ref={wrapRef} className="osc-ruler">
@@ -760,7 +792,7 @@ export const Oscilloscope: React.FC = () => {
       {channels.length === 0 ? (
         <div className="osc-empty">
           <span>{t('editor.oscilloscope.noChannels')}</span>
-          <span style={{ color: '#777' }}>{t('editor.oscilloscope.noChannelsHint')}</span>
+          <span style={{ color: 'var(--wb-9)' }}>{t('editor.oscilloscope.noChannelsHint')}</span>
         </div>
       ) : (
         <>

@@ -24,6 +24,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import { useSimulatorStore } from '../../store/useSimulatorStore';
 import { useOscilloscopeStore } from '../../store/useOscilloscopeStore';
 import { useEditorStore, type EditorViewMode } from '../../store/useEditorStore';
+import { useThemeMode } from '../../hooks/useTheme';
+import type { ThemeMode } from '../../lib/theme';
 import { LOCALES, LOCALE_META, type Locale } from '../../i18n/config';
 import { getLocaleFromPath, switchLocale } from '../../i18n/path';
 import {
@@ -86,6 +88,7 @@ export const EditorMenuBar: React.FC = () => {
   const toggleExplorer = useEditorStore((s) => s.toggleExplorer);
   const viewMode = useEditorStore((s) => s.viewMode);
   const setViewMode = useEditorStore((s) => s.setViewMode);
+  const [themeMode, setThemeMode] = useThemeMode();
   const undo = useSimulatorStore((s) => s.undo);
   const redo = useSimulatorStore((s) => s.redo);
   const history = useSimulatorStore((s) => s.history);
@@ -215,6 +218,12 @@ export const EditorMenuBar: React.FC = () => {
     { kind: 'command', id: 'view.zoomOut', label: t('editor.canvas.zoomOut', 'Zoom out') },
   ];
 
+  const themeModes: { key: ThemeMode; label: string }[] = [
+    { key: 'dark', label: t('editor.menu.themeDark', 'Dark') },
+    { key: 'light', label: t('editor.menu.themeLight', 'Light') },
+    { key: 'system', label: t('editor.menu.themeSystem', 'Match system') },
+  ];
+
   const layoutModes: { key: EditorViewMode; label: string }[] = [
     { key: 'code', label: t('editor.shell.code', 'Code') },
     { key: 'both', label: t('editor.shell.both', 'Both') },
@@ -323,6 +332,29 @@ export const EditorMenuBar: React.FC = () => {
                 >
                   <span>{m.label}</span>
                   <span className="emb-shortcut">{viewMode === m.key ? '✓' : ''}</span>
+                </button>
+              ))}
+              <div className="emb-separator" />
+              {/* Appearance. Not an editor setting — the choice is stored per
+                  origin and the blog and docs portal read the same key, so
+                  flipping it here flips velxio.dev. "System" is opt-in, never
+                  the default: an unset preference is dark. */}
+              <div className="emb-section-label">
+                {t('editor.menu.appearance', 'Appearance')}
+              </div>
+              {themeModes.map((m) => (
+                <button
+                  key={m.key}
+                  role="menuitemradio"
+                  aria-checked={themeMode === m.key}
+                  className="emb-item"
+                  onClick={() => {
+                    setOpen(null);
+                    setThemeMode(m.key);
+                  }}
+                >
+                  <span>{m.label}</span>
+                  <span className="emb-shortcut">{themeMode === m.key ? '✓' : ''}</span>
                 </button>
               ))}
               <div className="emb-separator" />
