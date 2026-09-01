@@ -630,8 +630,11 @@ const ProBadge: React.FC = () => (
       fontSize: 11,
       fontWeight: 700,
       letterSpacing: 0.6,
-      color: 'var(--color-feedback-warning-soft)',
-      background: 'linear-gradient(180deg,var(--color-feedback-warning),#f5a623)',
+      // Ink and fill both fixed: a gold PRO pill is gold on either theme,
+      // and --color-feedback-warning is a red-orange in light mode, which
+      // this gradient is not meant to be.
+      color: '#1a1205',
+      background: 'linear-gradient(180deg,#ffd566,#f5a623)',
       boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
     }}
   >
@@ -943,8 +946,8 @@ const OnlineBadge: React.FC = () => (
       fontSize: 11,
       fontWeight: 700,
       letterSpacing: 0.6,
-      color: 'var(--color-feedback-success-soft)',
-      background: 'linear-gradient(180deg,var(--color-feedback-success),#14b8a6)',
+      color: '#04241a',
+      background: 'linear-gradient(180deg,#4ade80,#14b8a6)',
       boxShadow: '0 1px 4px rgba(0,0,0,0.35)',
     }}
   >

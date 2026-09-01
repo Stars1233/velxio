@@ -178,6 +178,12 @@
    * the AC/DC summary). They are instrument annotations, so the hues carry
    * meaning — gold for a DC level, cyan for AC — and light mode darkens them
    * for contrast rather than swapping them for something else. */
+  /* Wire chrome. The wire's own colour is the user's; these two are the
+   * contrast outline that keeps crossings readable and the marker used for
+   * hover and selection, and both have to flip with the bed they sit on. */
+  --color-wire-outline: #1a1a1a;
+  --color-wire-marker:  #ffffff;
+
   --color-canvas-label-bg: rgba(26, 26, 26, 0.85);
   --color-probe-dc:        #ffd700;
   --color-probe-dc-dim:    #ffa500;
@@ -221,16 +227,24 @@
 [data-theme='light'] {
   /* Workbench ramp, inverted. Anchored on VS Code's Light+ workbench so the
    * editor reads as a familiar light IDE rather than an inverted dark one:
-   * white editor bed, #f3f3f3 panels, GitHub-ish neutral text. */
-  --wb-0:  #ffffff;
-  --wb-1:  #f7f7f9;
+   * white editor bed, grey everywhere else, GitHub-ish neutral text.
+   *
+   * Only --wb-2 and --wb-5 are pure white, and both are earned: wb-2 is the
+   * bed you read CODE on, and wb-5 is what makes a dropdown or a dialog lift
+   * off the page. Everything structural -- the canvas (wb-1), the panels and
+   * toolbars (wb-3), the rows and hover beds (wb-4) -- is grey, which is how
+   * the light themes people compare us against read: white is the content,
+   * grey is the chrome around it. An all-white build looks unfinished and
+   * loses every edge between panes. */
+  --wb-0:  #fbfbfc;
+  --wb-1:  #e9ebee;
   --wb-2:  #ffffff;
-  --wb-3:  #f3f3f4;
-  --wb-4:  #ececee;
+  --wb-3:  #eceef1;
+  --wb-4:  #e0e3e8;
   --wb-5:  #ffffff;
-  --wb-6:  #e0e0e4;
-  --wb-7:  #d0d0d6;
-  --wb-8:  #b6b6bd;
+  --wb-6:  #d5d9df;
+  --wb-7:  #c4c9d1;
+  --wb-8:  #aab0ba;
   --wb-9:  #8c949e;
   --wb-10: #6e7781;
   --wb-11: #57606a;
@@ -240,9 +254,9 @@
   /* Backgrounds. Surface-1 is the card white; the canvas behind it is the
    * light-gray ground, mirroring how dark puts the darkest value furthest
    * back. */
-  --color-bg-canvas:    var(--gray-100);
+  --color-bg-canvas:    #eef0f3;
   --color-bg-surface-1: var(--gray-0);
-  --color-bg-surface-2: var(--gray-50);
+  --color-bg-surface-2: #f6f7f9;
   --color-bg-surface-3: var(--gray-200);
   --color-bg-input:     var(--gray-0);
   --color-bg-overlay:   rgba(20, 20, 22, 0.40);
@@ -297,10 +311,13 @@
 
   /* Canvas */
   --color-canvas-bg:        var(--wb-1);
-  --color-canvas-grid:      rgba(0, 0, 0, 0.055);
+  --color-canvas-grid:      rgba(23, 32, 48, 0.07);
   --color-canvas-panel:     var(--wb-2);
   --color-canvas-panel-fg:  var(--wb-12);
   --color-canvas-shadow:    rgba(15, 15, 20, 0.16);
+
+  --color-wire-outline: #ffffff;
+  --color-wire-marker:  #1f2430;
 
   --color-canvas-label-bg: rgba(255, 255, 255, 0.92);
   --color-probe-dc:        #8a6100;

@@ -288,7 +288,7 @@
 
 /* Component Card */
 .component-card {
-  background: white;
+  background: var(--wb-7);
   border: 1.5px solid var(--wb-8);
   border-radius: 8px;
   padding: 10px;
@@ -402,4 +402,26 @@
 
 .components-grid::-webkit-scrollbar-thumb:hover {
   background: var(--color-scrollbar-thumb-hover);
+}
+
+/* ── Raising a card is not the same operation in both themes ──────────
+   In dark you raise a surface by LIGHTENING it: the card (--wb-7, #3d3d3d)
+   sits above the dialog (--wb-5, #2d2d2d). Inverting that literally would
+   give light mode a mid-grey card on a white dialog, i.e. a card that reads
+   as a hole rather than as something raised.
+
+   In light the idiom is the other way round: the chrome is grey and the
+   CONTENT is white. So the dialog body takes a grey and the cards stay
+   white, which is how every light IDE and the schematic editors we get
+   compared to do it. Dark is untouched. */
+[data-theme='light'] .component-picker-modal {
+  background: var(--wb-3);
+}
+
+[data-theme='light'] .component-card {
+  background: var(--wb-2);
+}
+
+[data-theme='light'] .card-thumbnail {
+  background: var(--wb-1);
 }
