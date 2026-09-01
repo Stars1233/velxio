@@ -1099,19 +1099,49 @@ class ArduinoCLIService:
     async def uninstall_library(self, library_name: str) -> dict:
         """
         Uninstall an Arduino library.
+
+        Runs against the same sketchbook `list_installed_libraries` reads, so
+        "installed" and "uninstallable" mean the same thing to a caller. They
+        used to disagree: uninstall got no env at all, aiming at arduino-cli's
+        default sketchbook while the listing came from the fallback one.
+
+        A no-op is reported as a FAILURE. arduino-cli prints "Library X is not
+        installed" and exits 0, which read as success and told the agent its
+        uninstall had worked; it recompiled, hit the same error, and uninstalled
+        the same library again. Three times, in the session that prompted this.
         """
         try:
             print(f"Uninstalling library: {library_name}")
 
+            uninstall_env = dict(os.environ)
+            _fb = os.environ.get("VELXIO_FALLBACK_SKETCHBOOK")
+            if _fb:
+                uninstall_env["ARDUINO_DIRECTORIES_USER"] = _fb
+
             def _run():
                 return subprocess.run(
                     [self.cli_path, "lib", "uninstall", library_name],
-                    capture_output=True, text=True, encoding='utf-8', errors='replace'
+                    capture_output=True, text=True, encoding='utf-8', errors='replace',
+                    env=uninstall_env,
                 )
 
             result = await asyncio.to_thread(_run)
 
             if result.returncode == 0:
+                combined = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
+                if "is not installed" in combined or "not found" in combined:
+                    print(f"Nothing to uninstall: {library_name} is not installed")
+                    return {
+                        "success": False,
+                        "error": (
+                            f"{library_name} is not installed in this project, so "
+                            f"there is nothing to uninstall. If a compile is failing "
+                            f"inside it, the library came from the server-wide shared "
+                            f"cache: declare the libraries your sketch actually uses "
+                            f"in the project manifest instead."
+                        ),
+                        "stdout": result.stdout,
+                    }
                 print(f"Successfully uninstalled {library_name}")
                 return {"success": True, "stdout": result.stdout}
             else:

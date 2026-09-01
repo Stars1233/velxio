@@ -93,6 +93,22 @@ _PER_LIB_ROOTS = (
 )
 
 
+# Directories a library ships that are never compiled: documentation and
+# support material per the Arduino library spec. Headers found ONLY here do
+# not get to add dependencies to the build (see the transitive scan below).
+_SUPPORT_ONLY_DIRS = frozenset({
+    'extras', 'examples', 'example', 'test', 'tests', 'docs', 'doc',
+    'benchmark', 'benchmarks', 'fuzz', 'fuzzing', 'ci',
+})
+
+# A compiled source reaching into one of those dirs, e.g. FirebaseJson's
+# `#include "extras/print/printf.h"` or FastLED's unity build.
+_SUPPORT_INCLUDE_RE = re.compile(
+    r'#\s*include\s*[<"][^">]*\b(?:%s)/' % '|'.join(sorted(_SUPPORT_ONLY_DIRS)),
+    re.IGNORECASE,
+)
+
+
 def _sanitise_lib_dirname(name: str) -> str:
     """Component-relative directory name for a library.
 
@@ -2142,16 +2158,52 @@ class ESPIDFCompiler:
                 # Per-library roots let this scan the library that was JUST
                 # copied instead of re-walking every library merged so far —
                 # same result (resolved_headers dedups), a fraction of the I/O.
-                for lib_file in (dest_root if _PER_LIB_ROOTS else comp_dir).rglob('*'):
+                #
+                # Support dirs (extras/, examples/, test/, docs/) are NOT part
+                # of the compilation unit — their sources are already excluded
+                # above (header_only_dirs / excluded_dirs). Their HEADERS were
+                # still scanned, and that is how a build could acquire a
+                # dependency nothing in it asked for: Adafruit_GC9A01A ships
+                # extras/Adafruit_Arcada_FeatherM4.h, that file includes
+                # <arcadatype.h>, and a plain ESP32-S3 sketch with two includes
+                # ended up merging 26 libraries and failing inside Adafruit
+                # Arcada, a SAMD-only library it never mentioned (2026-09).
+                #
+                # A handful of libraries DO reach into extras/ for real
+                # (FirebaseJson's src/json/FirebaseJson.h, FastLED's unity
+                # build), so support headers are held back rather than dropped
+                # and released only when a compiled source actually includes a
+                # path under one of those dirs.
+                scan_root = dest_root if _PER_LIB_ROOTS else comp_dir
+                deferred_support: list[str] = []
+                for lib_file in scan_root.rglob('*'):
                     if lib_file.suffix.lower() not in ('.h', '.hpp', '.hh', '.hxx', '.inc'):
                         continue
+                    try:
+                        rel_parts = lib_file.relative_to(scan_root).parts[:-1]
+                    except ValueError:
+                        rel_parts = ()
+                    in_support = any(
+                        p.lower() in _SUPPORT_ONLY_DIRS for p in rel_parts
+                    )
+                    sink = deferred_support if in_support else headers_to_resolve
                     try:
                         lib_content = lib_file.read_text(encoding='utf-8', errors='ignore')
                         for th in self._detect_external_includes(lib_content):
                             if th not in resolved_headers:
-                                headers_to_resolve.append(th)
+                                sink.append(th)
                     except OSError:
                         pass
+                if deferred_support:
+                    if self._support_dirs_are_reachable(scan_root):
+                        headers_to_resolve.extend(deferred_support)
+                    else:
+                        logger.info(
+                            f'[espidf] "{lib_dir_name}": held back '
+                            f'{len(deferred_support)} transitive include(s) found '
+                            f'only under support dirs (extras/, examples/, ...) — '
+                            f'no compiled source in the library reaches into them'
+                        )
             elif is_core_provided or header in self._CORE_ESP32_HEADERS:
                 # Resolved to an arduino-esp32 core lib, or a known core
                 # header that lives inside the core (not a standalone lib
@@ -2386,6 +2438,32 @@ class ESPIDFCompiler:
             if i not in ('defined', 'ifdef', 'ifndef')
         ]
         return bool(idents) and all(i in self._PP_TRUE for i in idents)
+
+    @staticmethod
+    def _support_dirs_are_reachable(scan_root: Path) -> bool:
+        """True when a COMPILED file in this library includes a path under a
+        support dir (extras/, examples/, ...).
+
+        Only then may headers that live exclusively in those dirs contribute
+        transitive dependencies to the build. Rare: 33 of the 1232 cached
+        libraries ship headers there at all, and only a few of those (the
+        Firebase family, FastLED) actually reach into them.
+        """
+        for f in scan_root.rglob('*'):
+            if f.suffix.lower() not in ('.h', '.hpp', '.hh', '.hxx', '.inc', '.c', '.cpp'):
+                continue
+            try:
+                parts = f.relative_to(scan_root).parts[:-1]
+            except ValueError:
+                parts = ()
+            if any(p.lower() in _SUPPORT_ONLY_DIRS for p in parts):
+                continue
+            try:
+                if _SUPPORT_INCLUDE_RE.search(f.read_text(encoding='utf-8', errors='ignore')):
+                    return True
+            except OSError:
+                continue
+        return False
 
     def _detect_external_includes(
         self, code: str, own_files: set[str] | None = None
