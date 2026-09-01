@@ -1100,36 +1100,35 @@ class ArduinoCLIService:
         """
         Uninstall an Arduino library.
 
-        Runs against the same sketchbook `list_installed_libraries` reads, so
-        "installed" and "uninstallable" mean the same thing to a caller. They
-        used to disagree: uninstall got no env at all, aiming at arduino-cli's
-        default sketchbook while the listing came from the fallback one.
-
         A no-op is reported as a FAILURE. arduino-cli prints "Library X is not
         installed" and exits 0, which read as success and told the agent its
         uninstall had worked; it recompiled, hit the same error, and uninstalled
         the same library again. Three times, in the session that prompted this.
+
+        DELIBERATELY does NOT point at VELXIO_FALLBACK_SKETCHBOOK, even though
+        `list_installed_libraries` does. On velxio.dev that sketchbook's
+        libraries/ is a symlink to the shared content-addressed cache: every
+        library, for every user. Uninstall is a per-user operation and must
+        never be able to reach it. Making the two agree looked like a
+        consistency fix and was in fact a way to delete a library out from
+        under everyone (caught in review before it could be used, 2026-09-01).
+        The asymmetry is the safety property: listing is read-only, uninstall
+        is not.
         """
         try:
             print(f"Uninstalling library: {library_name}")
-
-            uninstall_env = dict(os.environ)
-            _fb = os.environ.get("VELXIO_FALLBACK_SKETCHBOOK")
-            if _fb:
-                uninstall_env["ARDUINO_DIRECTORIES_USER"] = _fb
 
             def _run():
                 return subprocess.run(
                     [self.cli_path, "lib", "uninstall", library_name],
                     capture_output=True, text=True, encoding='utf-8', errors='replace',
-                    env=uninstall_env,
                 )
 
             result = await asyncio.to_thread(_run)
 
             if result.returncode == 0:
                 combined = f"{result.stdout or ''}\n{result.stderr or ''}".lower()
-                if "is not installed" in combined or "not found" in combined:
+                if "is not installed" in combined:
                     print(f"Nothing to uninstall: {library_name} is not installed")
                     return {
                         "success": False,
