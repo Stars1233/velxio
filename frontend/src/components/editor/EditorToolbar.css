@@ -463,3 +463,20 @@
   white-space: pre-wrap;
   line-height: 1.4;
 }
+
+/* ── Appearance switch ───────────────────────────────────────────────
+   The one-click light/dark button. It is the LAST thing in the strip that
+   earns its width: the same choice lives permanently in View > Appearance,
+   the way Language lives in the Account menu.
+
+   So it steps aside as soon as the shared bar starts collapsing. Without
+   this it cost the strip 28px at every tier, which moved the whole ladder
+   ~20px earlier — a window that used to hold the toolbar on one row with
+   labels dropped to icons, and one that held it inline dropped the strip
+   to its own bar. A control that pushes the toolbar into a worse layout is
+   not worth a permanent seat; one that appears whenever there is room is.
+   See headerStripFit.ts for how the tiers are decided. */
+.unified-toolbar--compact .tb-btn-theme,
+.app-header--strip-below .tb-btn-theme {
+  display: none;
+}
