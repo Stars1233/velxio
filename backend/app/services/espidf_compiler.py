@@ -2351,7 +2351,8 @@ class ESPIDFCompiler:
                 '    -Wno-error=narrowing -Wno-error=write-strings\n'
                 '    -Wno-error=missing-field-initializers -Wno-error=reorder\n'
                 '    -Wno-error=unused-variable -Wno-error=unused-but-set-variable\n'
-                '    -Wno-error=format -Wno-error=maybe-uninitialized\n'
+                '    -Wno-error=format -Wno-error=format-overflow\n'
+                '    -Wno-error=format-truncation -Wno-error=maybe-uninitialized\n'
                 '    -Wno-error=uninitialized)\n'
             )
 
