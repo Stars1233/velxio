@@ -24,6 +24,10 @@ import { clearChipDrives } from '../../simulation/customChips/chipPinDrives';
 import { requestElectricalResolve } from '../../simulation/spice/electricalResolveHook';
 import { reportRunEvent } from '../../services/metricsService';
 import { useProjectStore } from '../../store/useProjectStore';
+import {
+  compileProgress,
+  MULTI_BOARD_PROGRESS_ID,
+} from '../../store/useCompileProgressStore';
 import { LibraryManagerModal } from '../simulator/LibraryManagerModal';
 import { InstallLibrariesModal } from '../simulator/InstallLibrariesModal';
 import { mergeSuggestedLibraries } from '../../utils/libraryManifest';
@@ -522,6 +526,11 @@ export const EditorToolbar = ({
 
     blog('info', `Starting compilation for ${boardLabel} (${fqbn})...`);
 
+    // Board-less projects still compile (a sketch with no board on the canvas),
+    // but there is no board id to key the progress card on. Null = no card,
+    // which is the pre-existing behaviour for that case.
+    const progressBoardId = activeBoardId ?? null;
+
     try {
       // Reconcile the two "active group" pointers before reading sources.
       // If the editor drifted to another BOARD's group (dangling pointer
@@ -556,6 +565,12 @@ export const EditorToolbar = ({
           content: f.content,
         }));
 
+      // Progress card over the canvas: from here on the user can see the
+      // build advance (and, when the server is busy, that it is queued rather
+      // than stuck). Only the paths that actually reach the backend register —
+      // MicroPython and the Pi boards returned above without a build.
+      if (progressBoardId) compileProgress.begin(progressBoardId, boardLabel);
+
       // Stream live cmake + ninja output into the compilation console as
       // it arrives, instead of waiting for the whole build to finish.
       // Each poll the backend returns the cumulative stdout buffer; we
@@ -565,13 +580,20 @@ export const EditorToolbar = ({
         sketchFiles,
         fqbn,
         currentProject?.id ?? null,
-        ({ stdout }) => {
-          if (stdout.length <= lastStreamedLen) return;
-          const delta = stdout.slice(lastStreamedLen);
-          lastStreamedLen = stdout.length;
+        (info) => {
+          const { stdout } = info;
+          const grew = stdout.length > lastStreamedLen;
+          const delta = grew ? stdout.slice(lastStreamedLen) : '';
+          if (grew) lastStreamedLen = stdout.length;
           const newLines = delta
             .split('\n')
             .filter((s) => s.trim() && !isNoiseBuildLine(s));
+          // The card shows the newest line under the bar, so it updates on
+          // every poll — including the ones that brought no output at all,
+          // which is exactly when the queue/stage fields matter most.
+          if (progressBoardId) {
+            compileProgress.update(progressBoardId, info, newLines[newLines.length - 1]);
+          }
           if (!newLines.length) return;
           const now = new Date();
           setCompileLogs((prev: CompilationLog[]) => [
@@ -629,7 +651,9 @@ export const EditorToolbar = ({
         setMessage({ type: 'success', text: 'Compiled successfully' });
         markCompiled();
         setMissingLibHint(false);
+        if (progressBoardId) compileProgress.finish(progressBoardId, 'success');
       } else {
+        if (progressBoardId) compileProgress.finish(progressBoardId, 'error');
         const errText = result.error || result.stderr || 'Compile failed';
         setMessage({ type: 'error', text: errText });
         // Issue #208: drop the previous successful program from this
@@ -649,6 +673,7 @@ export const EditorToolbar = ({
       const errMsg = err instanceof Error ? err.message : 'Compile failed';
       blog('error', errMsg);
       setMessage({ type: 'error', text: errMsg });
+      if (progressBoardId) compileProgress.finish(progressBoardId, 'error');
     } finally {
       setCompiling(false);
     }
@@ -1052,6 +1077,22 @@ export const EditorToolbar = ({
     let ok = 0;
     let boardFailed = 0;
 
+    // One progress card for the whole run, relabelled per board — the builds
+    // are sequential, so "board 2 of 3" is the honest headline and the elapsed
+    // time should be the run's, not the current board's.
+    //
+    // The denominator counts boards that will REALLY reach the backend: Pi and
+    // MicroPython boards are handled locally, and a board with no FQBN is
+    // skipped before it ever compiles, so counting either left the label
+    // stuck at "(2/3)" for a run that only ever built two.
+    const compilableCount = boardsList.filter(
+      (b) =>
+        !isPiBoardKind(b.boardKind) &&
+        b.languageMode !== 'micropython' &&
+        !!fqbnForLanguage(b.boardKind, b.languageMode),
+    ).length;
+    let compiledIndex = 0;
+
     for (const board of boardsList) {
       const label = boardDisplayName(board);
       // Stamp this board's lines so the console groups them under its section.
@@ -1093,6 +1134,19 @@ export const EditorToolbar = ({
 
       blog('info', 'compiling...');
 
+      compiledIndex++;
+      const cardLabel =
+        compilableCount > 1 ? `${label} (${compiledIndex}/${compilableCount})` : label;
+      // Raise the card at the FIRST real compile, not before the loop: any
+      // MicroPython / Pi boards ahead of it are handled locally, and starting
+      // the card early made it claim "Waiting for a build slot" while nothing
+      // had been submitted to the server at all.
+      if (compiledIndex === 1) {
+        compileProgress.begin(MULTI_BOARD_PROGRESS_ID, cardLabel);
+      } else {
+        compileProgress.relabel(MULTI_BOARD_PROGRESS_ID, cardLabel);
+      }
+
       try {
         const groupFiles = useEditorStore.getState().getGroupFiles(board.activeFileGroupId);
         const sketchFiles = groupFiles
@@ -1105,13 +1159,17 @@ export const EditorToolbar = ({
           sketchFiles,
           fqbn,
           currentProject?.id ?? null,
-          ({ stdout }) => {
-            if (stdout.length <= lastStreamedLen) return;
-            const delta = stdout.slice(lastStreamedLen);
-            lastStreamedLen = stdout.length;
+          (info) => {
+            const { stdout } = info;
+            const grew = stdout.length > lastStreamedLen;
+            const delta = grew ? stdout.slice(lastStreamedLen) : '';
+            if (grew) lastStreamedLen = stdout.length;
             const newLines = delta
             .split('\n')
             .filter((s) => s.trim() && !isNoiseBuildLine(s));
+            compileProgress.update(
+              MULTI_BOARD_PROGRESS_ID, info, newLines[newLines.length - 1],
+            );
             if (!newLines.length) return;
             const now = new Date();
             setCompileLogs((prev: CompilationLog[]) => [
@@ -1147,6 +1205,12 @@ export const EditorToolbar = ({
         blog('error', err instanceof Error ? err.message : String(err));
         boardFailed++;
       }
+    }
+
+    if (compiledIndex > 0) {
+      compileProgress.finish(
+        MULTI_BOARD_PROGRESS_ID, boardFailed > 0 ? 'error' : 'success',
+      );
     }
 
     const failed = boardFailed + chipFailed;

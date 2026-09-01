@@ -14,6 +14,7 @@ import { FileExplorer } from '../components/editor/FileExplorer';
 
 // Lazy-load Pi workspace so xterm.js isn't in the main bundle
 import { CompilationConsole } from '../components/editor/CompilationConsole';
+import { CompileProgressCard } from '../components/editor/CompileProgressCard';
 import { SimulatorCanvas } from '../components/simulator/SimulatorCanvas';
 import { SerialMonitor } from '../components/simulator/SerialMonitor';
 import { Oscilloscope } from '../components/simulator/Oscilloscope';
@@ -238,6 +239,12 @@ export const EditorPage: React.FC = () => {
   const [canvasHeaderSlot, setCanvasHeaderSlot] = useState<HTMLDivElement | null>(null);
   // Default to 'code' on mobile — show the editor so users can write/view code
   const [mobileView, setMobileView] = useState<'code' | 'circuit'>('code');
+
+  // Mirrors the `display: none` on the simulator panel below. The compile
+  // progress card renders over the canvas, so when that pane is hidden the
+  // card has to move to the editor pane instead of disappearing with it.
+  const simulatorHidden =
+    (isMobile && mobileView !== 'circuit') || (!isMobile && viewMode === 'code');
 
   // Save is dispatched to the pro overlay, which inspects auth state and
   // shows the right modal (Save vs Login prompt). In OSS without the
@@ -702,8 +709,19 @@ export const EditorPage: React.FC = () => {
                 panel (SerialMonitor renders an xterm for Pi kinds). The old
                 RaspberryPiWorkspace (own file tree + own editor + upload
                 button) confused users with three competing file surfaces. */}
-            <div className="editor-wrapper" style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+            <div
+              className="editor-wrapper"
+              style={{ flex: 1, overflow: 'hidden', minHeight: 0, position: 'relative' }}
+            >
               <CodeEditor />
+              {/* The compile card lives over the simulator canvas, which is
+                  where the build's result appears. In code-only view (and on
+                  a phone showing the editor) that pane is display:none, so it
+                  falls back to here rather than leaving the user with the
+                  toolbar spinner and no idea a queue exists. */}
+              {simulatorHidden && (
+                <CompileProgressCard inEditor onShowOutput={() => setConsoleOpen(true)} />
+              )}
             </div>
 
             {/* Console */}
@@ -745,15 +763,16 @@ export const EditorPage: React.FC = () => {
               : viewMode === 'code'
               ? '0%'
               : `${100 - editorWidthPct}%`,
-            display:
-              (isMobile && mobileView !== 'circuit') || (!isMobile && viewMode === 'code')
-                ? 'none'
-                : 'flex',
+            display: simulatorHidden ? 'none' : 'flex',
             flexDirection: 'column',
           }}
         >
           <div style={{ flex: 1, overflow: 'hidden', position: 'relative', minHeight: 0 }}>
             <SimulatorCanvas headerSlot={!isMobile ? canvasHeaderSlot : null} />
+            {/* Guarded rather than left to `display: none` on the panel: a
+                hidden copy still keeps its 100ms timer running and duplicates
+                the aria-live region a screen reader reads out. */}
+            {!simulatorHidden && <CompileProgressCard onShowOutput={() => setConsoleOpen(true)} />}
           </div>
           {serialMonitorOpen && (
             <>

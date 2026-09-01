@@ -296,6 +296,26 @@
       "close": "Close",
       "empty": "No compilation output yet. Click Compile to start."
     },
+    "compileProgress": {
+      "compiling": "Compiling {{board}}...",
+      "compilingBoards_one": "Compiling {{count}} board...",
+      "compilingBoards_other": "Compiling {{count}} boards...",
+      "queued": "Waiting for a build slot...",
+      "queuedHint": "Your build is in the queue. It starts automatically and is never cancelled.",
+      "preparing": "Preparing the build...",
+      "done": "Compiled successfully",
+      "failed": "Build failed",
+      "serverLoad": "Build server load",
+      "load": {
+        "low": "Quiet",
+        "moderate": "Moderate",
+        "high": "Busy",
+        "peak": "Very busy"
+      },
+      "priority": "Priority build",
+      "showOutput": "Show output",
+      "hide": "Hide (the build keeps running)"
+    },
     "newProject": {
       "title": "Start a new project",
       "subtitle": "Pick a blank workspace or a board with a ready-to-run Blink example. This replaces everything in the current workspace.",
