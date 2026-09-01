@@ -47,6 +47,7 @@ import {
 } from '../../utils/analytics';
 import './EditorToolbar.css';
 import { ThemeToggle } from '../layout/ThemeToggle';
+import { getResolvedTheme } from '../../lib/theme';
 
 /**
  * Output-console group for circuit pre-flight + runtime faults. Routing these
@@ -1395,9 +1396,15 @@ export const EditorToolbar = ({
     }
     setMessage({ type: 'info', text: 'Rendering screenshot — may take 5-10 seconds…' });
     try {
-      const resp = await fetch(`/api/pro/projects/${projectId}/screenshot.png`, {
-        credentials: 'include',
-      });
+      // The render happens in a headless browser on the server, which has
+      // no localStorage and therefore no idea which theme the user is
+      // looking at -- it used to hand back a dark image to someone working
+      // in light mode. Pass the RESOLVED theme so the export matches the
+      // canvas it was taken from.
+      const resp = await fetch(
+        `/api/pro/projects/${projectId}/screenshot.png?theme=${getResolvedTheme()}`,
+        { credentials: 'include' },
+      );
       if (resp.status === 402) {
         // Fire the in-place upgrade modal instead of bouncing to /pricing —
         // keeps the user in the editor with full context. The pro overlay's

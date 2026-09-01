@@ -178,6 +178,19 @@
    * the AC/DC summary). They are instrument annotations, so the hues carry
    * meaning — gold for a DC level, cyan for AC — and light mode darkens them
    * for contrast rather than swapping them for something else. */
+  /* Schematic symbol ink.
+   *
+   * Most parts on the canvas are photographic -- a board's PCB, an LED's
+   * lens -- and keep their colours on any theme. The transistor family is
+   * not: a BJT or MOSFET is a bare SCHEMATIC SYMBOL, strokes on the canvas
+   * with no body of its own, so its ink is drawing ink and has to invert
+   * like text does. Tuned light for the dark canvas, it disappeared
+   * outright on the light one. */
+  --color-symbol-ink:   #e6e6e6;
+  --color-symbol-lead:  #b8b8b8;
+  --color-symbol-label: #d0d0d0;
+  --color-symbol-body:  #7a7a7a;
+
   /* Wire chrome. The wire's own colour is the user's; these two are the
    * contrast outline that keeps crossings readable and the marker used for
    * hover and selection, and both have to flip with the bed they sit on. */
@@ -315,6 +328,11 @@
   --color-canvas-panel:     var(--wb-2);
   --color-canvas-panel-fg:  var(--wb-12);
   --color-canvas-shadow:    rgba(15, 15, 20, 0.16);
+
+  --color-symbol-ink:   #1f2430;
+  --color-symbol-lead:  #4a515e;
+  --color-symbol-label: #2b303a;
+  --color-symbol-body:  #8a909c;
 
   --color-wire-outline: #ffffff;
   --color-wire-marker:  #1f2430;
