@@ -12,7 +12,8 @@
  * instead — the standard light-UI trick for keeping cards crisp.
  */
 
-:root {
+:root,
+[data-theme='dark'] {
   --shadow-flat: none;
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.30),
               0 2px 6px rgba(0, 0, 0, 0.20);
@@ -28,7 +29,8 @@
   --shadow-sm: var(--shadow-1);
 }
 
-:root[data-theme='light'] {
+:root[data-theme='light'],
+[data-theme='light'] {
   --shadow-1: 0 1px 2px rgba(15, 15, 20, 0.06),
               0 2px 6px rgba(15, 15, 20, 0.05);
   --shadow-2: 0 2px 8px rgba(15, 15, 20, 0.08),

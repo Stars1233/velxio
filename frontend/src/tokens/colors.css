@@ -47,6 +47,14 @@
   --green-600: #248a3d;
   --amber-500: #ff9f0a;
   --amber-600: #c93400;
+}
+
+/* Everything below is THEMED. The dual selector is what lets a subtree pin
+ * itself to dark inside a light page (see DarkSurface in the pro overlay:
+ * the marketing pages are art-directed on black and opt out of light mode).
+ * `:root` alone would only ever theme the document element. */
+:root,
+[data-theme='dark'] {
 
   /* ── Workbench ramp (--wb-0 … --wb-13) ────────────────────────────────
    * The editor shell — menu bar, toolbars, file explorer, canvas, consoles,
@@ -209,7 +217,8 @@
  * has a counterpart above; adding a semantic token without a light value is
  * the one way to break this file, so keep the two blocks in the same order.
  */
-:root[data-theme='light'] {
+:root[data-theme='light'],
+[data-theme='light'] {
   /* Workbench ramp, inverted. Anchored on VS Code's Light+ workbench so the
    * editor reads as a familiar light IDE rather than an inverted dark one:
    * white editor bed, #f3f3f3 panels, GitHub-ish neutral text. */

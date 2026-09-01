@@ -665,3 +665,34 @@ body {
 .flash-indeterminate {
   animation: flash-indeterminate 1.4s ease-in-out infinite;
 }
+
+/* ── Pinned-dark subtrees (pro DarkSurface) ──────────────
+   The marketing pages render inside a [data-theme=dark] island, so the
+   appearance switch in the header would set a preference the reader cannot
+   see take effect until they navigate away. Hide it there; the editor's own
+   toolbar and the View menu remain the way in. */
+.velxio-dark-surface .header-theme-toggle {
+  display: none;
+}
+
+.header-theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  transition:
+    background var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out);
+}
+
+.header-theme-toggle:hover {
+  background: var(--color-wash-hover);
+  color: var(--color-fg-default);
+}
