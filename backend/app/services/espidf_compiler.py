@@ -1814,6 +1814,8 @@ class ESPIDFCompiler:
         user_libs_dir: Path,
         allowed_libraries: set[str] | None = None,
         merged_libs: dict[str, str] | None = None,
+        denied: set[str] | None = None,
+        speculative_out: set[str] | None = None,
     ) -> tuple[list[str], dict[str, str]]:
         """
         BFS over ext_headers (and transitive includes) to discover all external
@@ -1999,6 +2001,20 @@ class ESPIDFCompiler:
 
             if src_root:
                 lib_dir_name = src_root.parent.name if src_root.name == 'src' else src_root.name
+                if denied and lib_dir_name in denied:
+                    # Quarantined by a previous attempt: this library's own
+                    # sources are what failed the build, and nothing the sketch
+                    # named asked for it. See _quarantine_from_error.
+                    logger.warning(
+                        f'[espidf] <{header}> resolves to quarantined '
+                        f'"{lib_dir_name}" — not merging'
+                    )
+                    continue
+                if speculative_out is not None and header not in direct_headers:
+                    # Merged for a header the SKETCH never wrote. If the build
+                    # dies inside such a library, dropping it is safe: no line
+                    # of the user's code asked for it.
+                    speculative_out.add(lib_dir_name)
                 logger.info(f'[espidf] Merging "{lib_dir_name}" into user_libs_all for <{header}>')
                 found_any = True
                 header_to_comp[header] = 'user_libs_all'
@@ -2062,6 +2078,21 @@ class ESPIDFCompiler:
                     ):
                         return False
                     if has_src_layout:
+                        # A src/-layout library (Arduino 1.5+ recursive) compiles
+                        # src/** and nothing else. Root-level HEADERS are still
+                        # copied — harmless, and the root is not on -I anyway —
+                        # but a root-level .c/.cpp is not part of the library.
+                        # arduino-cli never builds it; we did, and FastLED ships
+                        # a developer scratch file there (test_rmt.cpp) that pokes
+                        # the ESP32-classic RMT register layout and does not
+                        # compile on an S3. That single stray file failed the
+                        # build even with FastLED as the ONLY merged library.
+                        # Cache-wide this is 3 of 1232 libraries and all three
+                        # are junk: fastled/test_rmt.cpp, onewirehub/main.cpp
+                        # (a desktop smoke file), seeedarduinombedtls/mbedtls.c
+                        # (whose entire content is "// Empty file").
+                        if len(parts) == 1 and rel_path.suffix.lower() in ('.c', '.cpp'):
+                            return False
                         return parts[0] == 'src' or len(parts) == 1
                     # Non-src-layout libs (Adafruit_GFX, etc.) keep auxiliary
                     # headers in subdirs like Fonts/ or gfxfont/. Anything not
@@ -2174,6 +2205,24 @@ class ESPIDFCompiler:
                 # build), so support headers are held back rather than dropped
                 # and released only when a compiled source actually includes a
                 # path under one of those dirs.
+                if self._SCAN_REACHABLE:
+                    # Walk the library's include graph from its entry points.
+                    # Resolve against the ORIGINAL tree (lib_root), not the
+                    # copy: the copy is a filtered subset, and under the
+                    # VELXIO_PER_LIB_ROOTS=0 hatch comp_dir interleaves every
+                    # merged library, so "the file next to this one" would
+                    # mean another library's file.
+                    walked = self._walk_library_includes(
+                        lib_root, has_src_layout, _should_include
+                    )
+                    new_ext = [h for h in walked if h not in resolved_headers]
+                    headers_to_resolve.extend(new_ext)
+                    logger.info(
+                        f'[espidf] "{lib_dir_name}": include walk -> '
+                        f'{len(walked)} external header(s), {len(new_ext)} new'
+                    )
+                    continue
+
                 scan_root = dest_root if _PER_LIB_ROOTS else comp_dir
                 deferred_support: list[str] = []
                 for lib_file in scan_root.rglob('*'):
@@ -2396,10 +2445,61 @@ class ESPIDFCompiler:
         'TARGET_RP2040', 'TARGET_RP2350', 'PICO_RP2040', 'PICO_RP2350',
         'CORE_TEENSY', '__MBED__', '__SAMD51__', '__SAM3X8E__',
         'ARDUINO_ARCH_NRF52', 'NRF52', 'TARGET_ESP8266',
+        # arduino-esp32 defines USE_TINYUSB only for the TinyUSB CDC mode
+        # (ARDUINO_USB_MODE=0). We hardcode ARDUINO_USB_MODE=1 (hardware CDC)
+        # on every board, so it is never defined here. Adafruit_NeoPixel.h
+        # guards `#include <Adafruit_TinyUSB.h>` on it, which is how a plain
+        # NeoPixel sketch merged a library that cannot build in this image.
+        'USE_TINYUSB',
     })
+    # A has_include INVOCATION is a library-availability PROBE, not a
+    # dependency: `#if __has_include(<X.h>)` asks "did the user install X?".
+    # Answering "yes" by merging X makes the probe true for the real
+    # compiler — we manufacture our own premise, and drag in the library and
+    # every one of its sources. During the scan the answer is 0.
+    #
+    # The open paren is REQUIRED. `#if defined __has_include` (GxEPD2) and
+    # `#ifdef __has_include` (lvgl) test whether the compiler SUPPORTS the
+    # operator; those must stay live. 27 cached libraries use that form.
+    # The `\w*` prefix catches vendor wrappers spelled differently, such as
+    # FastLED's `FL_HAS_INCLUDE(x)` -> `__has_include(x)`.
+    _PP_HAS_INCLUDE_RE = re.compile(r'\b\w*has_include\s*\(', re.IGNORECASE)
     _PP_IDENT_RE = re.compile(r'[A-Za-z_][A-Za-z_0-9]*')
     _PP_COMMENT_BLOCK_RE = re.compile(r'/\*.*?\*/', re.DOTALL)
     _PP_COMMENT_LINE_RE = re.compile(r'//[^\n]*')
+
+    @classmethod
+    def _pp_strip_has_include(cls, expr: str) -> str:
+        """Replace every `has_include(...)` invocation with the literal 0.
+
+        Substitution, NOT "the condition mentions has_include so it is dead":
+        ESPAsyncWebServer.h:9 is
+        `#if !defined(HOST) || __has_include(<lwip/tcpbase.h>)`, and killing
+        that branch kills the whole header. Substituting gives
+        `!defined(HOST) || 0`, which stays live. Correct either way.
+        """
+        out: list[str] = []
+        i = 0
+        while True:
+            m = cls._PP_HAS_INCLUDE_RE.search(expr, i)
+            if not m:
+                out.append(expr[i:])
+                break
+            out.append(expr[i:m.start()])
+            depth = 1
+            j = m.end()
+            while j < len(expr) and depth:
+                if expr[j] == '(':
+                    depth += 1
+                elif expr[j] == ')':
+                    depth -= 1
+                j += 1
+            if depth:           # unbalanced — leave the text alone
+                out.append(expr[m.start():])
+                break
+            out.append('0')
+            i = j
+        return ''.join(out)
 
     def _pp_branch_is_live(self, expr: str) -> bool:
         """Best-effort evaluation of a #if / #elif condition.
@@ -2411,16 +2511,29 @@ class ESPIDFCompiler:
         direction only costs us the old behaviour; being wrong the other
         way would hide a genuinely needed library.
         """
-        idents = [
-            i for i in self._PP_IDENT_RE.findall(expr)
-            if i not in ('defined', 'ifdef', 'ifndef')
-        ]
-        if not idents:
-            return True
-        if any(i in self._PP_TRUE for i in idents):
-            return True
-        # Dead only when we recognise EVERY identifier as false-on-ESP32.
-        return not all(i in self._PP_FALSE for i in idents)
+        expr = self._pp_strip_has_include(expr)
+        # Read the condition as a top-level OR of AND-terms; it is dead only
+        # when EVERY term is false. This split is what lets
+        # `!defined(HOST) || 0` stay live (one live term is enough) while
+        # `FL_HAS_INCLUDE(<X>) && defined(ESP32)` dies (one false conjunct
+        # sinks the term, whatever else it says).
+        for term in expr.split('||'):
+            # A conjunct that is EXACTLY the substituted 0 makes the term
+            # false. Compared literally after stripping parens so `!0` — a
+            # negated probe, which is TRUE — never matches.
+            if any(c.strip().strip('()').strip() == '0' for c in term.split('&&')):
+                continue
+            idents = [
+                i for i in self._PP_IDENT_RE.findall(term)
+                if i not in ('defined', 'ifdef', 'ifndef')
+            ]
+            if not idents:
+                return True                   # arithmetic/unknown -> live
+            if any(i in self._PP_TRUE for i in idents):
+                return True
+            if not all(i in self._PP_FALSE for i in idents):
+                return True                   # something unrecognised -> live
+        return False
 
     def _pp_branch_is_provably_true(self, expr: str) -> bool:
         """True only when EVERY identifier is a macro known-true on ESP32 —
@@ -2433,7 +2546,11 @@ class ESPIDFCompiler:
         with ENABLE_GxEPD2_GFX defaulting to 0 — treating the unknown #if as
         taken pruned the #else, silently dropped the Adafruit_GFX dependency
         and broke every GxEPD2 e-paper example (found by the gallery compile
-        smoke, 2026-08-15)."""
+        smoke, 2026-08-15).
+
+        A has_include probe is never provably true either, which is what keeps
+        FastLED's `#else` fallback (clockless_fake.hpp) scanned."""
+        expr = self._pp_strip_has_include(expr)
         idents = [
             i for i in self._PP_IDENT_RE.findall(expr)
             if i not in ('defined', 'ifdef', 'ifndef')
@@ -2466,8 +2583,200 @@ class ESPIDFCompiler:
                 continue
         return False
 
+    # A wrong guess can cascade: dropping one speculative library reveals the
+    # next. Bounded because each round costs a build — though only on a build
+    # that is red without it, and ccache makes the rebuilds incremental.
+    _MAX_QUARANTINE_ROUNDS = int(os.environ.get('VELXIO_MAX_QUARANTINE_ROUNDS', '3'))
+
+    # Rollback hatch, mirroring _PER_LIB_ROOTS. Off = the legacy scan that
+    # reads every header in the library in isolation.
+    _SCAN_REACHABLE = os.environ.get('VELXIO_LIB_SCAN_REACHABLE', '1') not in (
+        '0', 'false', 'False', ''
+    )
+
+    def _walk_library_includes(
+        self, lib_root: Path, has_src_layout: bool, is_source: 'Callable[[Path], bool]'
+    ) -> list[str]:
+        """External headers a library really needs, by walking its include graph.
+
+        The old scan rglob'd every header in the library and read each one in
+        ISOLATION. That charges the build for dependencies of files the
+        compiler never opens, and — worse — it cannot see a guard that lives
+        one file up. FastLED is the case that forced this:
+
+            src/platforms/adafruit/clockless.cpp.hpp:7
+                #if FL_HAS_INCLUDE(<Adafruit_NeoPixel.h>)
+                #include "platforms/adafruit/clockless_real.hpp"
+            src/platforms/adafruit/clockless_real.hpp:10
+                #include <Adafruit_NeoPixel.h>          <- no guard here
+
+        clockless_real.hpp is only reachable from inside that probe, but read
+        standalone it looks like an unconditional dependency. An eight-LED
+        blink merged fifteen libraries and died inside Adafruit TinyUSB.
+
+        ENTRY POINTS are the compiled sources UNION every header directly at
+        the library's include root. The header half is load-bearing, not
+        decoration: entering only from sources reaches nothing at all in a
+        header-only library (ArduinoJson has no .cpp) and loses
+        <Adafruit_GFX.h> from GxEPD2, which is precisely the regression this
+        file records for 2026-08-15.
+
+        INTERNAL RESOLUTION mirrors what GCC does under the one-root-per-
+        library -I layout (_PER_LIB_ROOTS):
+          1. quoted form only: the includer's own directory, which always
+             wins for "..." whatever -I says;
+          2. either form: the library's single exported include root;
+          3. flat layout only: utility/, the other root such libraries get.
+        A spec that resolves inside the library contributes NOTHING external:
+        it is the library's own file, not a dependency. That is the
+        generalised form of "a library's own header is not external", which
+        is how FastLED's `#include "lib8tion.h"` used to resolve to UncleRus
+        (an unrelated sensor bundle scoring higher on architectures=esp32).
+        """
+        include_root = lib_root / 'src' if has_src_layout else lib_root
+        extra_roots = [] if has_src_layout else [lib_root / 'utility']
+
+        def resolve_internal(from_file: Path, spec: str, quoted: bool) -> Path | None:
+            cands = []
+            if quoted:
+                cands.append(from_file.parent / spec)
+            cands.append(include_root / spec)
+            cands.extend(r / spec for r in extra_roots)
+            for c in cands:
+                try:
+                    # lvgl writes `../../../../src/...` chains that, unnormalised,
+                    # grow until the OS refuses the name (ENAMETOOLONG).
+                    real = Path(os.path.normpath(str(c)))
+                    real.relative_to(lib_root)      # never escape the library
+                    if real.is_file():
+                        return real
+                except (ValueError, OSError):
+                    continue
+            return None
+
+        entries: list[Path] = []
+        for f in lib_root.rglob('*'):
+            if not f.is_file():
+                continue
+            try:
+                rel = f.relative_to(lib_root)
+            except ValueError:
+                continue
+            if not is_source(rel):
+                continue
+            if f.suffix.lower() in ('.c', '.cpp'):
+                entries.append(f)
+        if include_root.is_dir():
+            for f in include_root.iterdir():
+                if f.is_file() and f.suffix.lower() in (
+                    '.h', '.hpp', '.hh', '.hxx', '.inc', '.inl', '.ipp', '.tcc'
+                ):
+                    entries.append(f)
+
+        external: list[str] = []
+        seen_ext: set[str] = set()
+        visited: set[Path] = set()
+        queue = list(dict.fromkeys(entries))
+        while queue:
+            cur = queue.pop()
+            if cur in visited:
+                continue
+            visited.add(cur)
+            try:
+                code = cur.read_text(encoding='utf-8', errors='ignore')
+            except OSError:
+                continue
+            for spec, quoted in self._iter_live_includes(code):
+                target = resolve_internal(cur, spec, quoted)
+                if target is not None:
+                    if target not in visited:
+                        queue.append(target)
+                    continue
+                name = self._external_header_name(spec)
+                if name and name not in seen_ext:
+                    seen_ext.add(name)
+                    external.append(name)
+        return external
+
+    @staticmethod
+    def _quarantine_from_error(result: dict, speculative: set[str]) -> list[str]:
+        """Speculatively-merged libraries the build actually died inside.
+
+        Reads only DIAGNOSTIC lines — `...: error:` / `fatal error:` — for a
+        path under `user_libs/user_libs_all/<libdir>/`. Scanning the whole
+        output would be wrong: the failing compiler command line is echoed
+        into it, and every merged library appears there as a `-I` flag, so a
+        blob-wide match would quarantine the entire build including the
+        library the sketch actually asked for.
+
+        Returns the ones that were resolver guesses (merged for a header the
+        sketch never wrote). An error in the sketch, in the core, or in a
+        library the user named yields an empty list — those are real errors
+        and must surface untouched.
+        """
+        if not speculative:
+            return []
+        blob = '\n'.join(
+            str(result.get(k) or '') for k in ('error', 'stderr', 'stdout')
+        )
+        if not blob.strip():
+            return []
+        found: list[str] = []
+        for line in blob.splitlines():
+            if 'error:' not in line:
+                continue
+            for m in re.finditer(r'user_libs_all/([^/\s:]+)/', line):
+                name = m.group(1)
+                if name in speculative and name not in found:
+                    found.append(name)
+        return found
+
+    def _pp_chain_has_true_arm(self, lines: list[str]) -> dict[int, bool]:
+        """Map each chain (keyed by the line index of its `#if`) to whether any
+        of its arms is provably true for this target. See the call site."""
+        result: dict[int, bool] = {}
+        pending: list[list] = []          # [if_line, has_true]
+        for idx, raw in enumerate(lines):
+            line = raw.strip()
+            if not line.startswith('#'):
+                continue
+            dtv = line[1:].lstrip()
+            if dtv.startswith(('ifdef', 'ifndef', 'if ', 'if(')):
+                if dtv.startswith('ifdef'):
+                    t = self._pp_branch_is_provably_true(dtv[5:])
+                elif dtv.startswith('ifndef'):
+                    ids = self._PP_IDENT_RE.findall(dtv[6:])
+                    t = bool(ids) and all(i in self._PP_FALSE for i in ids)
+                else:
+                    t = self._pp_branch_is_provably_true(dtv[2:])
+                pending.append([idx, t])
+            elif dtv.startswith('elif'):
+                if pending:
+                    pending[-1][1] = (
+                        pending[-1][1] or self._pp_branch_is_provably_true(dtv[4:])
+                    )
+            elif dtv.startswith('endif'):
+                if pending:
+                    rec = pending.pop()
+                    result[rec[0]] = rec[1]
+        for rec in pending:               # unterminated chain (truncated file)
+            result[rec[0]] = rec[1]
+        return result
+
+    def _iter_live_includes(self, code: str) -> list[tuple[str, bool]]:
+        """Every `#include` in a branch that is not provably dead on ESP32,
+        as (spec, quoted). Verbatim spec: slashes kept, nothing filtered.
+
+        Split out of _detect_external_includes so the reachability walk can
+        FOLLOW internal edges. That scanner drops any spec containing '/'
+        (they are esp-idf internals as far as it cares), but a library's own
+        `#include "platforms/adafruit/clockless_real.hpp"` is exactly how the
+        walk gets from one of its files to the next.
+        """
+        return self._detect_external_includes(code, _raw=True)  # type: ignore[return-value]
+
     def _detect_external_includes(
-        self, code: str, own_files: set[str] | None = None
+        self, code: str, own_files: set[str] | None = None, _raw: bool = False
     ) -> list[str]:
         """Library header names an ESP32 build could really need.
 
@@ -2497,11 +2806,29 @@ class ESPIDFCompiler:
         code = self._PP_COMMENT_BLOCK_RE.sub(' ', code)
         code = self._PP_COMMENT_LINE_RE.sub(' ', code)
 
+        lines = code.splitlines()
+        # PRE-PASS: for each #if/#elif/#else chain, does ANY arm evaluate
+        # provably true for this target? Platform dispatch is written as one
+        # long chain and the arm we take is rarely the first:
+        #
+        #   #if defined(FL_IS_ARM_LPC)      <- unknown, scanned live today
+        #   #elif defined(NRF51)            <- unknown, scanned live today
+        #   ... eight more foreign platforms ...
+        #   #elif defined(ESP32)            <- PROVABLY TRUE: the one we take
+        #
+        # A single forward pass can only prune arms AFTER a taken one, so
+        # FastLED's whole ARM tree was walked and `<FreeRTOS.h>` (an ARM RTOS
+        # port header) resolved to esp32blearduino, whose src/FreeRTOS.h then
+        # failed to compile. Knowing the chain has a true arm lets the arms
+        # BEFORE it be pruned too — exactly one arm of a chain is ever taken,
+        # and we know which.
+        chain_true = self._pp_chain_has_true_arm(lines)
+
         headers: list[str] = []
         own = own_files or set()
-        # Stack of (this_branch_live, any_branch_taken_yet) per #if nesting.
-        stack: list[tuple[bool, bool]] = []
-        for raw in code.splitlines():
+        # (this_branch_live, any_branch_taken_yet, chain id = line of its #if)
+        stack: list[tuple[bool, bool, int]] = []
+        for _ln, raw in enumerate(lines):
             line = raw.strip()
             if line.startswith('#'):
                 dtv = line[1:].lstrip()
@@ -2523,32 +2850,41 @@ class ESPIDFCompiler:
                     else:
                         live = self._pp_branch_is_live(dtv[2:])
                         taken = self._pp_branch_is_provably_true(dtv[2:])
-                    stack.append((live, taken))
+                    # Some LATER arm of this chain is the one we take.
+                    if chain_true.get(_ln) and not taken:
+                        live = False
+                    stack.append((live, taken, _ln))
                     continue
                 if dtv.startswith('elif'):
                     if stack:
-                        _cur, taken = stack[-1]
+                        _cur, taken, cid = stack[-1]
+                        arm_true = self._pp_branch_is_provably_true(dtv[4:])
                         live = (not taken) and self._pp_branch_is_live(dtv[4:])
-                        stack[-1] = (
-                            live,
-                            taken or self._pp_branch_is_provably_true(dtv[4:]),
-                        )
+                        if chain_true.get(cid) and not arm_true:
+                            live = False
+                        stack[-1] = (live, taken or arm_true, cid)
                     continue
                 if dtv.startswith('else'):
                     if stack:
-                        _cur, taken = stack[-1]
-                        stack[-1] = (not taken, True)
+                        _cur, taken, cid = stack[-1]
+                        # A chain with a provably-true arm never reaches its
+                        # #else, whether or not that arm came first.
+                        stack[-1] = ((not taken) and not chain_true.get(cid), True, cid)
                     continue
                 if dtv.startswith('endif'):
                     if stack:
                         stack.pop()
                     continue
-            if not all(live for live, _ in stack):
+            if not all(live for live, _t, _c in stack):
                 continue  # inside a branch that is dead on ESP32
             m = re.search(r'#\s*include\s*(?:<([^>]+)>|"([^"]+)")', line)
             if not m:
                 continue
             h = m.group(1) or m.group(2)
+            if _raw:
+                # The walk wants the spec exactly as written, plus its form.
+                headers.append((h, m.group(2) is not None))
+                continue
             if h in own:
                 continue
             if h in self._BUILTIN_HEADERS:
@@ -2561,6 +2897,21 @@ class ESPIDFCompiler:
                 continue
             headers.append(h)
         return headers
+
+    def _external_header_name(self, spec: str) -> str | None:
+        """The library header a spec names, or None when it is not one.
+
+        The same filters _detect_external_includes applies at the end of its
+        scan, factored out so the walk can apply them only to the specs that
+        did NOT resolve inside the library.
+        """
+        if spec in self._BUILTIN_HEADERS:
+            return None
+        if '/' in spec:
+            return None
+        if re.match(r'^(esp_|driver/|soc/|hal/|nvs|rom/)', spec):
+            return None
+        return spec
 
     def _find_library_for_header(self, header: str, libs_dir: Path) -> Path | None:
         """
@@ -2680,6 +3031,10 @@ class ESPIDFCompiler:
                 return False
 
             if has_src_layout:
+                # Same rule as _should_include: src/** is the library, a
+                # root-level .c/.cpp is not (see the note there).
+                if len(parts) == 1 and relative_path.suffix.lower() in ('.c', '.cpp'):
+                    return False
                 return parts[0] == 'src' or len(parts) == 1
 
             return len(parts) == 1 or parts[0].lower() == 'utility'
@@ -3841,7 +4196,11 @@ class ESPIDFCompiler:
             f'idf={"v5 (" + self.idf5_path + ")" if use_idf5 else "v4.4 (" + self.idf_path + ")"}'
         )
 
-        async def _attempt(allowed: set[str] | None) -> dict:
+        async def _attempt(
+            allowed: set[str] | None,
+            denied: set[str] | None = None,
+            speculative: set[str] | None = None,
+        ) -> dict:
             # P2.1e — materialize a per-compile library scope: the manifest's
             # libs symlinked from the content-addressed cache (with a legacy-dir
             # fallback for any not yet cached). A no-op overlay / scan-all
@@ -3891,6 +4250,7 @@ class ESPIDFCompiler:
                         arduino_mode=arduino_mode, use_idf5=use_idf5,
                         pure_idf=pure_idf, board_fqbn=board_fqbn,
                         custom_wifi_ssids=custom_wifi_ssids,
+                        denied_libraries=denied, speculative_out=speculative,
                     )
                 with tempfile.TemporaryDirectory(prefix='espidf_') as temp_dir:
                     project_dir = Path(temp_dir) / 'project'
@@ -3909,16 +4269,20 @@ class ESPIDFCompiler:
                     # rmtree unlinks the symlinks, never their cache/legacy targets.
                     shutil.rmtree(scope_dir.parent, ignore_errors=True)
 
-        async def _attempt_safe(allowed: set[str] | None) -> dict:
+        async def _attempt_safe(
+            allowed: set[str] | None,
+            denied: set[str] | None = None,
+            speculative: set[str] | None = None,
+        ) -> dict:
             # Retry ONCE on a clearly-transient infrastructure failure (cmake /
             # nested bootloader / managed-components / sdkconfig) — never on a
             # user-code error. These hit occasionally on a cold variant build;
             # a retry resumes the now-warmer build dir and succeeds. Cheap via
             # ccache + ninja incremental.
-            r = await _attempt(allowed)
+            r = await _attempt(allowed, denied, speculative)
             if not r.get('success') and self._is_transient_build_failure(r):
                 logger.warning('[espidf] transient build failure; retrying once')
-                r2 = await _attempt(allowed)
+                r2 = await _attempt(allowed, denied, speculative)
                 if r2.get('success') or not self._is_transient_build_failure(r2):
                     return r2
             return r
@@ -3926,7 +4290,10 @@ class ESPIDFCompiler:
         # Pure ESP-IDF mode never resolves Arduino libraries — force the
         # no-manifest path (the manifest names Arduino libs, which don't
         # exist in a pure IDF build).
-        result = await _attempt_safe(None if pure_idf else allowed_libraries)
+        speculative_libs: set[str] = set()
+        result = await _attempt_safe(
+            None if pure_idf else allowed_libraries, speculative=speculative_libs
+        )
 
         # Graceful fallback (P2). A manifest-scoped compile that fails because a
         # header isn't in the manifest (an undeclared / transitive dependency)
@@ -3956,7 +4323,51 @@ class ESPIDFCompiler:
                 # it carries text; fall through to the scoped result otherwise.
                 if str(retry.get('error') or retry.get('stderr') or '').strip():
                     retry['scope_retry_failed'] = True
-                    return retry
+                    result = retry
+
+        # Quarantine (2026-09). A speculative merge that fails the build is
+        # dropped and the build retried once. "Speculative" = merged for a
+        # header the SKETCH never wrote, so no line of the user's code asked
+        # for it, and it is a resolver guess. When the guess is wrong the user
+        # gets an error from inside a library they never named:
+        #   FastLED -> (a `__has_include` probe) -> Adafruit_NeoPixel
+        #           -> (`#ifdef USE_TINYUSB`)     -> Adafruit TinyUSB
+        #           -> "'CONFIG_TINYUSB_MSC_BUFSIZE' was not declared"
+        # No static rule catches every such guess: three separate idioms
+        # (has_include probes, opt-in feature macros, foreign-platform trees)
+        # each needed their own fix, and the cascade found a fourth path every
+        # time. This is the fail-soft that does not need to be clairvoyant.
+        # Cost: one extra build, and only on a build that is red today.
+        quarantined: list[str] = []
+        rounds = 0
+        while (
+            not result.get('success')
+            and not pure_idf
+            and rounds < self._MAX_QUARANTINE_ROUNDS
+        ):
+            offenders = [
+                o for o in self._quarantine_from_error(result, speculative_libs)
+                if o not in quarantined
+            ]
+            if not offenders:
+                break
+            quarantined.extend(offenders)
+            rounds += 1
+            logger.warning(
+                f'[espidf] build failed inside speculatively-merged '
+                f'{offenders} — dropping and rebuilding '
+                f'(round {rounds}/{self._MAX_QUARANTINE_ROUNDS})'
+            )
+            attempt = await _attempt_safe(
+                None if pure_idf else allowed_libraries,
+                denied=set(quarantined),
+            )
+            if attempt.get('success'):
+                attempt['quarantined_libraries'] = list(quarantined)
+                return attempt
+            if not str(attempt.get('error') or '').strip():
+                break
+            result = attempt
         return result
 
     async def _compile_in_dir(
@@ -3974,6 +4385,8 @@ class ESPIDFCompiler:
         pure_idf: bool = False,
         board_fqbn: str | None = None,
         custom_wifi_ssids: list[str] | None = None,
+        denied_libraries: set[str] | None = None,
+        speculative_out: set[str] | None = None,
     ) -> dict:
         """Inner compile body: writes sketch + libs into `project_dir`,
         runs cmake + ninja, merges binaries. Caller is responsible for
@@ -4268,6 +4681,8 @@ class ESPIDFCompiler:
                     arduino_comp_name, user_libs_dir,
                     allowed_libraries=allowed_libraries,
                     merged_libs=merged_libs_report,
+                    denied=denied_libraries,
+                    speculative_out=speculative_out,
                 )
 
             # Patch main/CMakeLists.txt — REQUIRES and INCLUDE_DIRS for user_libs_all.
