@@ -326,7 +326,8 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
       style={{
         position: 'fixed',
         inset: 0,
-        background: 'rgba(0, 0, 0, 0.6)',
+        background: 'var(--color-bg-overlay)',
+        backdropFilter: 'blur(4px)',
         zIndex: 9600,
         display: 'flex',
         alignItems: 'center',
@@ -338,12 +339,12 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
           width: 560,
           maxWidth: 'calc(100vw - 32px)',
           maxHeight: 'calc(100vh - 64px)',
-          background: 'var(--color-accent-soft)',
+          background: 'var(--wb-1)',
           color: 'var(--wb-13)',
-          border: '1px solid var(--wb-5)',
+          border: '1px solid var(--wb-6)',
           borderRadius: 8,
           padding: 20,
-          boxShadow: '0 12px 36px rgba(0,0,0,0.7)',
+          boxShadow: 'var(--shadow-4)',
           display: 'flex',
           flexDirection: 'column',
           gap: 14,
@@ -428,7 +429,7 @@ const PaidGateView = ({ onClose }: { onClose: () => void }) => {
   };
   return (
     <div>
-      <div style={{ padding: 16, background: 'var(--color-accent-soft)', borderRadius: 4, marginBottom: 12 }}>
+      <div style={{ ...insetBoxStyle, padding: 16, marginBottom: 12 }}>
         <div style={{ color: 'var(--wb-13)', fontSize: 14, fontWeight: 600, marginBottom: 8 }}>
           {t('editor.flash.paidOnlyTitle')}
         </div>
@@ -481,7 +482,7 @@ const BuildNotice = ({ status }: { status: BuildStatus }) => {
         marginTop: 10,
         padding: 10,
         background: 'var(--color-feedback-warning-soft)',
-        color: '#ffb84d',
+        color: 'var(--color-feedback-warning)',
         borderRadius: 4,
         fontSize: 12,
         lineHeight: 1.45,
@@ -506,7 +507,7 @@ const PickerView = ({ board, ports, selected, onSelect, onRefresh, onFlash }: Pi
   if (ports.length === 0) {
     return (
       <div>
-        <div style={{ padding: 16, background: 'var(--color-accent-soft)', borderRadius: 4, marginBottom: 12 }}>
+        <div style={{ ...insetBoxStyle, padding: 16, marginBottom: 12 }}>
           <div style={{ color: 'var(--wb-11)', fontSize: 13, marginBottom: 8 }}>
             {t('editor.flash.noPorts')}
           </div>
@@ -582,7 +583,7 @@ const WebReadyView = ({ board, mpyWebOk, onFlash }: WebReadyProps) => {
   const canFlash = isMpy ? mpyWebOk : true;
   return (
     <div>
-      <div style={{ padding: 16, background: 'var(--color-accent-soft)', borderRadius: 4, marginBottom: 12 }}>
+      <div style={{ ...insetBoxStyle, padding: 16, marginBottom: 12 }}>
         <div style={{ color: 'var(--wb-11)', fontSize: 13, marginBottom: 8 }}>
           {t('editor.flash.webIntro')}
         </div>
@@ -593,7 +594,7 @@ const WebReadyView = ({ board, mpyWebOk, onFlash }: WebReadyProps) => {
       </div>
 
       {isMpy && !mpyWebOk && (
-        <div style={{ padding: 10, background: 'var(--color-feedback-warning-soft)', color: '#ffb84d', borderRadius: 4, fontSize: 12, marginBottom: 12 }}>
+        <div style={{ padding: 10, background: 'var(--color-feedback-warning-soft)', color: 'var(--color-feedback-warning)', borderRadius: 4, fontSize: 12, marginBottom: 12 }}>
           {t('editor.flash.mpyUnavailable')}
         </div>
       )}
@@ -649,8 +650,8 @@ const ProgressView = ({ state, webMode, onRetry, onClose, onBackToPicker }: Prog
           <div style={{ fontSize: 13, color: 'var(--wb-12)', marginBottom: 8 }}>
             {t('editor.flash.compiling')}
           </div>
-          <div style={{ height: 6, background: 'var(--color-accent-soft)', borderRadius: 3, overflow: 'hidden', marginBottom: 12 }}>
-            <div className="flash-indeterminate" style={{ height: '100%', width: '35%', background: 'linear-gradient(90deg, #007acc 0%, #00a4ff 100%)' }} />
+          <div style={{ height: 6, background: 'var(--wb-4)', borderRadius: 3, overflow: 'hidden', marginBottom: 12 }}>
+            <div className="flash-indeterminate" style={{ height: '100%', width: '35%', background: 'var(--color-action-primary)' }} />
           </div>
         </>
       )}
@@ -660,12 +661,12 @@ const ProgressView = ({ state, webMode, onRetry, onClose, onBackToPicker }: Prog
           <div style={{ fontSize: 13, color: 'var(--wb-12)', marginBottom: 8 }}>
             {t('editor.flash.flashingOn', { port: state.port })}
           </div>
-          <div style={{ height: 6, background: 'var(--color-accent-soft)', borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
+          <div style={{ height: 6, background: 'var(--wb-4)', borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
             <div
               style={{
                 height: '100%',
                 width: `${Math.round(state.progress * 100)}%`,
-                background: 'linear-gradient(90deg, #007acc 0%, #00a4ff 100%)',
+                background: 'var(--color-action-primary)',
                 transition: 'width 0.2s ease',
               }}
             />
@@ -694,8 +695,9 @@ const ProgressView = ({ state, webMode, onRetry, onClose, onBackToPicker }: Prog
           height: 240,
           margin: 0,
           padding: 10,
-          background: 'var(--color-accent-soft)',
-          color: 'var(--wb-11)',
+          background: 'var(--wb-0)',
+          color: 'var(--wb-12)',
+          border: '1px solid var(--wb-6)',
           borderRadius: 4,
           fontSize: 11,
           fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
@@ -771,7 +773,7 @@ const closeBtnStyle: React.CSSProperties = {
   height: 28,
   padding: 0,
   background: 'transparent',
-  border: '1px solid var(--wb-5)',
+  border: '1px solid var(--wb-6)',
   borderRadius: 4,
   color: 'var(--wb-11)',
   fontSize: 18,
@@ -780,12 +782,12 @@ const closeBtnStyle: React.CSSProperties = {
 };
 
 const primaryBtnStyle: React.CSSProperties = {
-  padding: '7px 16px',
+  padding: '8px 17px',
   fontSize: 13,
   fontWeight: 600,
-  color: 'white',
-  background: 'linear-gradient(135deg, #007acc 0%, #005ea1 100%)',
-  border: '1px solid #005ea1',
+  color: 'var(--color-action-primary-fg)',
+  background: 'var(--color-action-primary)',
+  border: 'none',
   borderRadius: 4,
   cursor: 'pointer',
   fontFamily: 'inherit',
@@ -796,7 +798,7 @@ const secondaryBtnStyle: React.CSSProperties = {
   fontSize: 13,
   color: 'var(--wb-12)',
   background: 'transparent',
-  border: '1px solid var(--wb-5)',
+  border: '1px solid var(--wb-6)',
   borderRadius: 4,
   cursor: 'pointer',
   fontFamily: 'inherit',
@@ -805,10 +807,22 @@ const secondaryBtnStyle: React.CSSProperties = {
 const selectStyle: React.CSSProperties = {
   width: '100%',
   padding: '8px 10px',
-  background: 'var(--color-accent-soft)',
+  background: 'var(--wb-0)',
   color: 'var(--wb-13)',
-  border: '1px solid var(--wb-5)',
+  border: '1px solid var(--wb-6)',
   borderRadius: 4,
   fontSize: 13,
   fontFamily: 'inherit',
+};
+
+/**
+ * Bed for the explanatory blocks inside the dialog. --wb-0 is the ramp's
+ * deepest ground, so it reads as an inset under the --wb-1 panel in dark
+ * mode and as a raised card in light mode; the hairline keeps the edge
+ * visible in the light theme, where both values are near-white.
+ */
+const insetBoxStyle: React.CSSProperties = {
+  background: 'var(--wb-0)',
+  border: '1px solid var(--wb-6)',
+  borderRadius: 4,
 };
