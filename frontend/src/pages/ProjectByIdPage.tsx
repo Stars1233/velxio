@@ -151,8 +151,16 @@ interface RawProject {
 export function buildLoadPayload(project: RawProject) {
   // Boards
   let boards: BoardInstance[] = [];
+  // An explicit "[]" is a statement — the user removed every board, and
+  // board-less SPICE circuits are legitimate (a 9V cell into a 7805 needs no
+  // MCU). Only a MISSING or unparseable boards_json marks the pre-multi-board
+  // era that may synthesise a board from board_type. Conflating the two grew
+  // an Arduino Uno on every load of a board-less project, and the next save
+  // persisted the stowaway.
+  let explicitBoardsList = false;
   try {
-    const parsed = JSON.parse(project.boards_json || '[]');
+    const parsed = JSON.parse(project.boards_json || 'null');
+    if (Array.isArray(parsed)) explicitBoardsList = true;
     if (Array.isArray(parsed) && parsed.length > 0) {
       boards = parsed.map((b: Partial<BoardInstance> & { id: string; boardKind: string }) => ({
         id: b.id,
@@ -178,7 +186,7 @@ export function buildLoadPayload(project: RawProject) {
   } catch {
     // ignore
   }
-  if (boards.length === 0) {
+  if (boards.length === 0 && !explicitBoardsList) {
     // Pre-backfill project: synthesise a single board from board_type.
     const kind = (project.board_type || 'arduino-uno') as BoardKind;
     boards = [
