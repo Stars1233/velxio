@@ -1534,6 +1534,20 @@ class ESPIDFCompiler:
         # ESP32 build with errors naming libraries the user never installed.
         'Hash.h', 'Serial.h', 'HardwareSerial.h', 'WString.h',
         'WCharacter.h', 'binary.h', 'pins_arduino.h', 'Esp.h',
+        # FreeRTOS kernel headers. ESP-IDF ships FreeRTOS and puts its
+        # include dir on the path, so a library writing `#include <task.h>`
+        # or `<FreeRTOS.h>` means IDF's. The qualified spelling
+        # (freertos/FreeRTOS.h) is already dropped by the scan's slash rule;
+        # the BARE one used to resolve against the shared cache, where the
+        # only owners are an Arduino FreeRTOS port (wrong platform: ESP32
+        # has its own) and, for FreeRTOS.h alone, ESP32 BLE Arduino. That is
+        # how AsyncTCP's `#include <FreeRTOS.h>` pulled in esp32blearduino,
+        # whose src/FreeRTOS.h then failed on 'ringbuf_type_t', breaking
+        # every ESPAsyncWebServer build.
+        'FreeRTOS.h', 'task.h', 'semphr.h', 'portmacro.h', 'projdefs.h',
+        'event_groups.h', 'message_buffer.h', 'stream_buffer.h', 'timers.h',
+        'portable.h', 'queue.h', 'croutine.h', 'mpu_wrappers.h',
+        'StackMacros.h', 'stack_macros.h', 'deprecated_definitions.h',
     })
 
     # Config headers the PROJECT is meant to supply, never a library.
@@ -2031,6 +2045,7 @@ class ESPIDFCompiler:
                 # Skip non-buildable directories like examples, tests, docs.
                 lib_root = src_root.parent if src_root.name == 'src' else src_root
                 has_src_layout = (lib_root / 'src').is_dir()
+                text_included = self._text_included_sources(lib_root)
 
                 excluded_dirs = {
                     '.git', '.github', '.vscode', '__pycache__',
@@ -2140,6 +2155,19 @@ class ESPIDFCompiler:
                         shutil.copy2(f, dest)
                         seen_names.add(file_key)
                     if f.suffix in ('.cpp', '.c') and file_key not in cpp_files:
+                        # A source the library #includes as text is a fragment,
+                        # not a translation unit. Copy it (the includer needs
+                        # the file on disk) but never hand it to the compiler.
+                        rel_l = rel_key.lower()
+                        if any(
+                            rel_l == t or rel_l.endswith('/' + t)
+                            for t in text_included
+                        ):
+                            logger.debug(
+                                f'[espidf] "{lib_dir_name}": {rel_key} is text-included '
+                                f'— copied, not compiled'
+                            )
+                            continue
                         cpp_files.append(file_key)
 
                 if _PER_LIB_ROOTS and first_copy:
@@ -2402,6 +2430,8 @@ class ESPIDFCompiler:
                 '    -Wno-error=unused-variable -Wno-error=unused-but-set-variable\n'
                 '    -Wno-error=format -Wno-error=format-overflow\n'
                 '    -Wno-error=format-truncation -Wno-error=maybe-uninitialized\n'
+                '    -Wno-error=misleading-indentation -Wno-error=unused-function\n'
+                '    -Wno-error=char-subscripts -Wno-error=array-bounds\n'
                 '    -Wno-error=uninitialized)\n'
             )
 
@@ -2730,6 +2760,42 @@ class ESPIDFCompiler:
                 if name in speculative and name not in found:
                     found.append(name)
         return found
+
+    _TEXT_INCLUDED_SRC_RE = re.compile(
+        r'#\s*include\s*[<"]([^">]+\.(?:c|cpp))[">]', re.IGNORECASE
+    )
+
+    @classmethod
+    def _text_included_sources(cls, lib_root: Path) -> set[str]:
+        """Source files this library #includes as TEXT, as lowercase suffixes
+        of their path ("extensions/smooth_font.cpp", "smooth_font.cpp").
+
+        Such a file is NOT a translation unit and must never be compiled on
+        its own. TFT_eSPI.cpp ends with `#include "Extensions/Smooth_font.cpp"`
+        and that file opens with `void TFT_eSPI::loadFont(...)` — no includes,
+        no class declaration. Compiled standalone it dies with
+        "'TFT_eSPI' has not been declared", which is how the most popular
+        display library on the site was red on the S3.
+
+        Evidence-based rather than a layout rule: MySensors keeps REAL sources
+        in core/ and text-includes them too, so "only the root and utility/"
+        would have been both too blunt and, for MySensors, accidentally right
+        for the wrong reason. 41 of the 1232 cached libraries do this, over
+        407 references.
+        """
+        out: set[str] = set()
+        for f in lib_root.rglob('*'):
+            if not f.is_file() or f.suffix.lower() not in (
+                '.h', '.hpp', '.hh', '.hxx', '.c', '.cpp', '.inc', '.inl'
+            ):
+                continue
+            try:
+                text = f.read_text(encoding='utf-8', errors='ignore')
+            except OSError:
+                continue
+            for m in cls._TEXT_INCLUDED_SRC_RE.finditer(text):
+                out.add(m.group(1).replace('\\', '/').lower())
+        return out
 
     def _pp_chain_has_true_arm(self, lines: list[str]) -> dict[int, bool]:
         """Map each chain (keyed by the line index of its `#if`) to whether any
@@ -4338,6 +4404,15 @@ class ESPIDFCompiler:
         # each needed their own fix, and the cascade found a fourth path every
         # time. This is the fail-soft that does not need to be clairvoyant.
         # Cost: one extra build, and only on a build that is red today.
+        # The quarantine may only IMPROVE things. If dropping a speculative
+        # library does not produce a green build, the original failure is the
+        # honest one to report: the retry's error is an artifact of our own
+        # drop. ESPAsyncWebServer is the case that proved it — AsyncTCP is a
+        # real, required dependency, it was named in the first build's errors
+        # alongside a genuine offender, and dropping it turned a compile error
+        # into "fatal error: AsyncTCP.h: No such file", which hides the actual
+        # problem behind one we caused.
+        original = result
         quarantined: list[str] = []
         rounds = 0
         while (
@@ -4367,8 +4442,10 @@ class ESPIDFCompiler:
                 return attempt
             if not str(attempt.get('error') or '').strip():
                 break
+            # Keep going (the next round reads THIS attempt's errors), but the
+            # reported failure stays the original one.
             result = attempt
-        return result
+        return original
 
     async def _compile_in_dir(
         self,

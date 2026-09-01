@@ -37,6 +37,17 @@ if(DEFINED ENV{VELXIO_PURE_SKETCH})
         # sketch died on exactly that (2026-09).
         -Wno-error=format-overflow
         -Wno-error=format-truncation
+        # Style warnings that fire inside vendor library code the user cannot
+        # edit. TFT_eSPI's own Processors/TFT_eSPI_ESP32_S3.h trips
+        # misleading-indentation, which stopped the most popular display
+        # library on the site from building at all.
+        -Wno-error=misleading-indentation
+        -Wno-error=unused-function
+        -Wno-error=char-subscripts
+        # TFT_eSPI's ESP32-S3 processor header indexes a volatile register
+        # struct in a way GCC 14 reads as out of bounds. Vendor code, and it
+        # runs correctly on the silicon.
+        -Wno-error=array-bounds
         -Wno-error=maybe-uninitialized
         # uninitialized (the non-maybe flavour) fires inside the M5Stack
         # library itself: MahonyAHRS.cpp's fast inverse square root reads the
@@ -165,6 +176,17 @@ elseif(DEFINED ENV{ARDUINO_ESP32_PATH})
         # sketch died on exactly that (2026-09).
         -Wno-error=format-overflow
         -Wno-error=format-truncation
+        # Style warnings that fire inside vendor library code the user cannot
+        # edit. TFT_eSPI's own Processors/TFT_eSPI_ESP32_S3.h trips
+        # misleading-indentation, which stopped the most popular display
+        # library on the site from building at all.
+        -Wno-error=misleading-indentation
+        -Wno-error=unused-function
+        -Wno-error=char-subscripts
+        # TFT_eSPI's ESP32-S3 processor header indexes a volatile register
+        # struct in a way GCC 14 reads as out of bounds. Vendor code, and it
+        # runs correctly on the silicon.
+        -Wno-error=array-bounds
         -Wno-error=maybe-uninitialized
         # uninitialized (the non-maybe flavour) fires inside the M5Stack
         # library itself: MahonyAHRS.cpp's fast inverse square root reads the
