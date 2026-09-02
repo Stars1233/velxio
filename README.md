@@ -31,6 +31,19 @@ Velxio is free and open-source. Building and maintaining a full multi-board emul
 
 Your support helps cover server costs, library maintenance, and frees up time to add new boards, components, and features. Thank you!
 
+### Sponsors
+
+<!-- sponsors:start -->
+<p align="center">
+  <a href="https://github.com/zhaomh1998" title="@zhaomh1998"><img src="https://avatars.githubusercontent.com/u/12454193?s=100&u=e7b5657b3276222e3f69a9c68be183332a2d4d32&v=4" width="60" height="60" alt="@zhaomh1998"></a>
+</p>
+
+<p align="center"><sub>Thank you to past sponsors</sub></p>
+<p align="center">
+  <a href="https://github.com/joshuatz" title="@joshuatz"><img src="https://avatars.githubusercontent.com/u/17817563?s=100&v=4" width="40" height="40" alt="@joshuatz"></a>
+</p>
+<!-- sponsors:end -->
+
 ---
 
 ## Hardware Partners
