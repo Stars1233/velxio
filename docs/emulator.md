@@ -123,7 +123,7 @@ Backed by the **[lcgamboa QEMU fork](https://github.com/lcgamboa/qemu)** running
 | WiFi | SLIRP NAT — connect with `WiFi.begin("PICSimLabWifi", "")` |
 | BLE | Advertising + basic GAP via QEMU's BLE shim |
 
-Toolchain pinned to **arduino-esp32 2.0.17 (IDF 4.4.x)** — only version compatible with the lcgamboa WiFi shim. ESP-IDF projects (`idf.py`) supported via the [espidf_compiler](../backend/app/services/espidf_compiler.py) wrapper.
+Toolchain pinned to **arduino-esp32 3.3.10 (IDF 5.5.4)**, the same pair velxio.dev builds with. ESP-IDF projects (`idf.py`) supported via the [espidf_compiler](../backend/app/services/espidf_compiler.py) wrapper.
 
 See [ESP32 Emulation](./ESP32_EMULATION.md) for setup and architectural details, [ESP32 WiFi/Bluetooth](./ESP32_WIFI_BLUETOOTH.md) for the radio stack.
 

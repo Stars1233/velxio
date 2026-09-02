@@ -505,7 +505,7 @@ The `esp32c3-picsimlab` QEMU machine in the lcgamboa fork emulates the core CPU 
 | Hardware I2C / SPI | Not emulated | Callbacks not registered |
 | Interrupts (`attachInterrupt`) | Not emulated | GPIO interrupt lines not connected |
 | NVS / SPIFFS | Not emulated | Flash writes not persisted |
-| arduino-esp32 3.x (IDF 5.x) | **Unsupported** | Use 2.0.17 (IDF 4.4.x) — same as Xtensa |
+| arduino-esp32 2.x (IDF 4.4.x) | Legacy | Toolchain is 3.3.10 (IDF 5.5.4), same as Xtensa; 2.x-only APIs do not compile |
 
 > The QEMU machine boots the ESP-IDF bootloader and transitions to the Arduino `setup()`/`loop()` correctly for GPIO and UART sketches. Sketches using WiFi, LEDC, or RMT will boot but those peripherals will silently do nothing.
 
@@ -599,7 +599,7 @@ frontend/src/__tests__/fixtures/esp32c3-blink/
 | NeoPixel/RMT | Not emulated | Emulated (RMT decoder in worker) |
 | I2C / SPI | Not emulated | Emulated (synchronous QEMU callbacks) |
 | GPIO32–39 fix | N/A (only 22 GPIOs) | Required (bank 1 register) |
-| Arduino framework | Full (IDF 4.4.x) | Full (IDF 4.4.x) |
+| Arduino framework | Full (IDF 5.5.x) | Full (IDF 5.5.x) |
 | ISA unit tests | Yes (Vitest — RiscVCore.ts) | No (requires native lib) |
 
 ---

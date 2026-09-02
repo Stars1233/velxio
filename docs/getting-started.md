@@ -109,11 +109,13 @@ arduino-cli config add board_manager.additional_urls \
   http://drazzy.com/package_drazzy.com_index.json
 arduino-cli core install ATTinyCore:avr
 
-# For ESP32 / ESP32-S3 / ESP32-C3 (Arduino core 2.0.17 — the only version
-# compatible with the lcgamboa WiFi shim):
+# For ESP32 / ESP32-S3 / ESP32-C3 the backend prefers ESP-IDF 5.5.4 with the
+# arduino-esp32 3.3.10 core (see docs/ESP32_EMULATION.md, section 1.3). The
+# arduino-cli core is the fallback when ESP-IDF is not installed; use the
+# 3.x line so velxio.dev sketches compile:
 arduino-cli config add board_manager.additional_urls \
   https://espressif.github.io/arduino-esp32/package_esp32_index.json
-arduino-cli core install esp32:esp32@2.0.17
+arduino-cli core install esp32:esp32@3.3.9
 ```
 
 ---
@@ -191,7 +193,7 @@ Click **Examples** in the nav bar, filter by board or category, and click **Load
 | LED doesn't blink | Open the component property dialog and verify the Arduino pin assignment. Check the browser console for port-listener errors. |
 | Serial Monitor is empty | Ensure `Serial.begin()` is called inside `setup()`. |
 | Compilation errors | Open the compilation console at the bottom of the editor for full toolchain output. |
-| ESP32 fails to boot | Use `esp32:esp32@2.0.17` (the only version compatible with the lcgamboa WiFi shim). Check `libqemu-xtensa.{dll,so,dylib}` is present in `backend/app/services/`. |
+| ESP32 fails to boot | Build with the 3.x core (ESP-IDF 5.5.4 + arduino-esp32 3.3.10, or `esp32:esp32@3.3.9` via arduino-cli). Check `libqemu-xtensa.{dll,so,dylib}` is present in `backend/app/services/`. |
 | Pi 3 takes 5+ seconds to start | Expected — QEMU boots a full Raspberry Pi OS. The "booting" status is normal. |
 | Analog probe reads 0 V | Make sure both ends of the wire actually land on a pin (the wire turns blue when valid). Re-check ground connections. |
 | Custom chip won't compile | The custom-chip toolchain ships in the Docker image. For manual setups, see [Custom Chips: Build & Test](./wiki/custom-chips-build-and-test.md). |

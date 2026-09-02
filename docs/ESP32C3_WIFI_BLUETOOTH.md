@@ -280,8 +280,8 @@ python -m pytest tests/test_esp32c3_wifi.py -v
 
 ### La compilación falla para ESP32-C3
 
-- **ESP-IDF (producción)**: Los sketches ESP32-C3 se compilan con ESP-IDF 4.4.7 (`IDF_TARGET=esp32c3`). El backend traduce Arduino WiFi/WebServer a ESP-IDF C nativo.
-- **Fallback arduino-cli**: `arduino-cli core install esp32:esp32@2.0.17` (incluye soporte C3).
+- **ESP-IDF (producción)**: Los sketches ESP32-C3 se compilan con ESP-IDF 5.5.4 y el core arduino-esp32 3.3.10 (`IDF_TARGET=esp32c3`). El backend traduce Arduino WiFi/WebServer a ESP-IDF C nativo.
+- **Fallback arduino-cli**: `arduino-cli core install esp32:esp32@3.3.9` (incluye soporte C3).
 
 ### WiFi no se activa
 - Verifica que tu sketch incluya `#include <WiFi.h>`
