@@ -1065,6 +1065,8 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
             x: nx,
             y: ny,
           } as any);
+          // Recalculate wire positions during touch drag so wires follow the component.
+          recalculateAllWirePositions();
         }
       }
     };
@@ -1844,6 +1846,8 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
         }
         updateComponent(draggedComponentId, { x: nx, y: ny } as any);
       }
+      // Recalculate wire positions during drag so wires follow the component.
+      recalculateAllWirePositions();
     }
 
     // Handle wire creation preview
