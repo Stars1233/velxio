@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import type { PropertyDescriptor } from '../types/component-metadata';
-import { loadDoc, productPageHref, type ComponentDoc } from './componentDocs';
+import { loadDoc, productPageHref, productLinkKind, type ComponentDoc } from './componentDocs';
 import { trackProductPageClick } from '../utils/analytics';
 import './ComponentInfoPanel.css';
 
@@ -192,7 +192,9 @@ export const ComponentInfoBody: React.FC<{
               <polyline points="15 3 21 3 21 9" />
               <line x1="10" y1="14" x2="21" y2="3" />
             </svg>
-            {translate('editor.inspector.productPage')}
+            {productLinkKind(buyHref) === 'docs'
+              ? translate('editor.inspector.datasheetPage')
+              : translate('editor.inspector.productPage')}
           </a>
         </div>
       )}

@@ -411,7 +411,8 @@
       "propertiesTab": "プロパティ",
       "datasheetTab": "データシート",
       "examplesTitle": "サンプルプロジェクト",
-      "productPage": "製品ページ"
+      "productPage": "製品ページ",
+      "datasheetPage": "Specifications"
     },
     "flash": {
       "title": "{{board}} に書き込む",

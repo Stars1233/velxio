@@ -421,7 +421,8 @@
       "propertiesTab": "Propiedades",
       "datasheetTab": "Ficha técnica",
       "examplesTitle": "Proyectos de ejemplo",
-      "productPage": "Ver producto"
+      "productPage": "Ver producto",
+      "datasheetPage": "Especificaciones"
     },
     "flash": {
       "title": "Grabar {{board}}",

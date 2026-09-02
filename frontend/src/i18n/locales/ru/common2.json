@@ -411,7 +411,8 @@
       "propertiesTab": "Свойства",
       "datasheetTab": "Спецификация",
       "examplesTitle": "Примеры проектов",
-      "productPage": "Страница товара"
+      "productPage": "Страница товара",
+      "datasheetPage": "Specifications"
     },
     "flash": {
       "title": "Прошить {{board}}",

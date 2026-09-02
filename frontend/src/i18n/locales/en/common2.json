@@ -444,7 +444,8 @@
       "propertiesTab": "Properties",
       "datasheetTab": "Datasheet",
       "examplesTitle": "Example projects",
-      "productPage": "Product page"
+      "productPage": "Product page",
+      "datasheetPage": "Specifications"
     },
     "flash": {
       "title": "Flash {{board}}",

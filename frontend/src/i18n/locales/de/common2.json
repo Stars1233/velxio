@@ -411,7 +411,8 @@
       "propertiesTab": "Eigenschaften",
       "datasheetTab": "Datenblatt",
       "examplesTitle": "Beispielprojekte",
-      "productPage": "Produktseite"
+      "productPage": "Produktseite",
+      "datasheetPage": "Specifications"
     },
     "flash": {
       "title": "{{board}} flashen",

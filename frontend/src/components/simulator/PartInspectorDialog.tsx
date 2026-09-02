@@ -48,7 +48,7 @@ import {
   safeHref,
   type PanelData,
 } from '../ComponentInfoPanel';
-import { productPageHref } from '../componentDocs';
+import { productPageHref, productLinkKind } from '../componentDocs';
 import { trackProductPageClick } from '../../utils/analytics';
 import {
   layoutInspectorPins,
@@ -913,7 +913,9 @@ export const PartInspectorDialog: React.FC<PartInspectorDialogProps> = ({
                   <polyline points="15 3 21 3 21 9" />
                   <line x1="10" y1="14" x2="21" y2="3" />
                 </svg>
-                {t('editor.inspector.productPage')}
+                {productLinkKind(buyHref) === 'docs'
+                  ? t('editor.inspector.datasheetPage')
+                  : t('editor.inspector.productPage')}
               </a>
             </div>
           )}

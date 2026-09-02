@@ -411,7 +411,8 @@
       "propertiesTab": "属性",
       "datasheetTab": "数据手册",
       "examplesTitle": "示例项目",
-      "productPage": "产品页面"
+      "productPage": "产品页面",
+      "datasheetPage": "Specifications"
     },
     "flash": {
       "title": "烧录 {{board}}",
