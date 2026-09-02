@@ -120,14 +120,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [javascript-typescript, python]
+        # `actions` analyses the workflow files themselves, with dataflow
+        # rather than zizmor's pattern rules - the two find different things.
+        language: [javascript-typescript, python, actions]
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
       - uses: github/codeql-action/init@v3
         with:
-          language: ${{ matrix.language }}
+          # `languages`, plural. The singular form is silently ignored, and
+          # CodeQL then autodetects every language it can see - including the
+          # C/C++ in the ESP-IDF templates and sketches, which has no build
+          # here and fails the whole job with "could not process any code
+          # written in C/C++".
+          languages: ${{ matrix.language }}
           # security-extended adds the lower-precision security queries;
           # worth the extra noise on contributions from strangers.
           queries: security-extended
