@@ -552,6 +552,14 @@ body {
 .app-header--with-toolbar .header-left {
   gap: 6px;
 }
+/* Tauri desktop: the header is the toolbar strip and nothing else — the
+   brand and the menus live in the native title bar / menubar. */
+.app-header--desktop .header-left {
+  display: none;
+}
+.app-header--desktop .header-editor-toolbar {
+  margin-left: 0;
+}
 
 .app-header--with-toolbar .header-content {
   align-items: stretch;
