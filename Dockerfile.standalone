@@ -99,23 +99,35 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libusb-1.0-0 ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install ESP-IDF 4.4.7 (matches Arduino ESP32 core 2.0.17 / lcgamboa QEMU ROM)
-RUN git clone -b v4.4.7 --recursive --depth=1 --shallow-submodules \
-    https://github.com/espressif/esp-idf.git /opt/esp-idf
+# ESP-IDF v5.5.4 + arduino-esp32 3.3.10 — the same pair velxio.dev builds
+# with. espidf_compiler discovers them at /opt/esp-idf-v5 and
+# /opt/arduino-esp32-3 (overridable via IDF5_PATH / ARDUINO_ESP32_5_PATH) and
+# routes every ESP32-family Arduino build through them (_use_idf5).
+#
+# History: until 2026-08 this stage pinned IDF 4.4.7 + core 2.0.17 because
+# the original qemu-8.1.3 WiFi shim crashed on IDF 5.x cache handling. The
+# current libqemu builds run IDF 5.x firmware, and velxio.dev moved to the
+# 3.x core; shipping 2.0.17 here meant sketches written on velxio.dev
+# (ledcAttach, esp_now_recv_info_t, the esp_task_wdt config API, ...) did
+# not compile on a self-hosted image.
+RUN git clone -b v5.5.4 --recursive --depth=1 --shallow-submodules \
+    https://github.com/espressif/esp-idf.git /opt/esp-idf-v5
 
-WORKDIR /opt/esp-idf
+WORKDIR /opt/esp-idf-v5
 
-# Install toolchains for esp32 (Xtensa) and esp32c3 (RISC-V) only
-RUN ./install.sh esp32,esp32c3
+# Every family toolchain. Classic-ESP32 builds need the v5.5 xtensa toolchain
+# too: with only the RISC-V targets installed they silently pick whatever GCC
+# is on PATH and die mid-build on newlib header mismatches.
+RUN ./install.sh esp32,esp32s3,esp32c3,esp32c6
 
 # Clean up large unnecessary files to reduce image size
 RUN rm -rf .git docs examples \
     && find /root/.espressif -name '*.tar.*' -delete 2>/dev/null || true
 
-# Install Arduino-as-component for full Arduino API support in ESP-IDF builds
-RUN git clone --branch 2.0.17 --depth=1 --recursive --shallow-submodules \
-    https://github.com/espressif/arduino-esp32.git /opt/arduino-esp32 \
- && rm -rf /opt/arduino-esp32/.git
+# Arduino-as-component (3.x core, IDF 5.5 based) for full Arduino API support
+RUN git clone --branch 3.3.10 --depth=1 --recursive --shallow-submodules \
+    https://github.com/espressif/arduino-esp32.git /opt/arduino-esp32-3 \
+ && rm -rf /opt/arduino-esp32-3/.git
 
 # mkspiffs (arduino-esp32 0.2.3 flavor) — bakes uploaded files into the SPIFFS
 # data-partition image at compile time. Without it espidf_compiler._build_spiffs_image
@@ -252,10 +264,17 @@ ENV QEMU_RISCV32_LIB=/app/lib/libqemu-riscv32.so
 
 # ── ESP-IDF toolchain for ESP32 compilation ──────────────────────────────────
 # Copied from espidf-builder stage: IDF framework + cross-compiler toolchains
-COPY --from=espidf-builder /opt/esp-idf /opt/esp-idf
+COPY --from=espidf-builder /opt/esp-idf-v5 /opt/esp-idf-v5
 COPY --from=espidf-builder /root/.espressif /root/.espressif
+COPY --from=espidf-builder /opt/arduino-esp32-3 /opt/arduino-esp32-3
 
-COPY --from=espidf-builder /opt/arduino-esp32 /opt/arduino-esp32
+# Legacy-path symlinks: espidf_compiler hardcodes /opt/esp-idf (version
+# signature, IDF_PATH default) and /opt/arduino-esp32, and the entrypoint
+# sources /opt/esp-idf/export.sh. Pointing both at the v5 trees keeps every
+# read site working; the compiler still discovers the v5 install through
+# /opt/esp-idf-v5 and /opt/arduino-esp32-3.
+RUN ln -sn /opt/esp-idf-v5 /opt/esp-idf \
+ && ln -sn /opt/arduino-esp32-3 /opt/arduino-esp32
 
 # Memoize ldgen. It re-parses every component's linker.lf with pyparsing on
 # EVERY build - measured at 15.2 s here, 41% of a whole ESP-IDF compile of a
@@ -331,10 +350,31 @@ RUN mkdir -p /var/cache/ccache /var/lib/velxio-build /root/Arduino
 # /var/lib/velxio-build — persistent ESP-IDF build dir (one subdir per target)
 VOLUME ["/app/data", "/root/.arduino15", "/root/Arduino", "/var/cache/ccache", "/var/lib/velxio-build"]
 
-# Install ESP-IDF Python dependencies using the final image's Python
-# The requirements.txt has version constraints required by ESP-IDF 4.4.x
-RUN grep -v 'esp-windows-curses' /opt/esp-idf/requirements.txt \
-    | pip install --no-cache-dir -r /dev/stdin
+# Recreate the IDF v5.5 Python env with THIS stage's python. The
+# espidf-builder created it with its own python (3.10) and a venv's
+# site-packages are version-scoped, so the copied env cannot even import
+# `packaging` here; IDF's cmake also derives the env dir name from the
+# RUNNING python (idf5.5_py3.12_env) and fails with "python doesn't exist"
+# when it is missing. Every ESP32-family compile routes through the v5
+# tree, so a broken v5 env means no ESP32 compiles at all.
+RUN rm -rf /root/.espressif/python_env/idf5.5_* \
+ && rm -f /root/.espressif/espidf.constraints.v5.5.txt \
+ && cd /opt/esp-idf-v5 \
+ && ./tools/idf_tools.py install-python-env \
+ # The v5.5.4 snapshot is internally inconsistent: its cmake hardcodes
+ # component-manager interface_version 4 (project.cmake:64) while its
+ # requirements pin idf-component-manager~=2.2, whose CLI tops out at
+ # interface 3. Interface 4 lives in the 3.x line — install it and relax
+ # both pins so the cmake python dependency check accepts the pairing.
+ && /root/.espressif/python_env/idf5.5_*/bin/pip install "idf-component-manager>=3.1,<4" \
+ && sed -i 's/^idf-component-manager.*/idf-component-manager>=2.2,<4/' \
+      /root/.espressif/espidf.constraints.v5.5.txt \
+      /opt/esp-idf-v5/tools/requirements/requirements.core.txt \
+ && find /root/.espressif -name '*.tar.*' -delete 2>/dev/null || true
+
+# System-python IDF deps. IDF 5.x has no root requirements.txt (the 4.4
+# tree did); its equivalent is tools/requirements/requirements.core.txt.
+RUN pip install --no-cache-dir -r /opt/esp-idf-v5/tools/requirements/requirements.core.txt
 
 EXPOSE 80
 

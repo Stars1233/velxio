@@ -54,7 +54,8 @@ if [ -d /opt/arduino15-seed ]; then
 fi
 
 # Install missing cores.
-# ESP32 core MUST be 2.0.17 (IDF 4.4.x) — newer 3.x is incompatible with QEMU ROM bins.
+# ESP32 builds use ESP-IDF 5.5.4 + arduino-esp32 3.3.10 (the velxio.dev pair);
+# the arduino-cli 3.x core below is only the fallback when ESP-IDF is absent.
 arduino-cli core update-index 2>/dev/null || true
 arduino-cli core install arduino:avr 2>/dev/null || true
 arduino-cli core install rp2040:rp2040 2>/dev/null || true
@@ -70,13 +71,17 @@ if [ -f /opt/esp-idf/export.sh ]; then
     echo "✅ ESP-IDF $(cat /opt/esp-idf/version.txt 2>/dev/null || echo 'unknown') ready"
 else
     echo "⚠️  ESP-IDF not found — falling back to arduino-cli for ESP32"
+    # 3.x core (IDF 5.5 based), matching the arduino-esp32 3.3.10 the image
+    # builds with under ESP-IDF; 3.3.9 is the newest 3.3.x the board manager
+    # index carries. Sketches written on velxio.dev use 3.x-only APIs.
+    ESP32_CORE_VERSION=3.3.9
     ESP32_VER=$(arduino-cli core list 2>/dev/null | grep esp32:esp32 | awk '{print $2}')
     if [ -z "$ESP32_VER" ]; then
-        echo "📦 Installing ESP32 core 2.0.17..."
-        arduino-cli core install esp32:esp32@2.0.17
-    elif [[ "$ESP32_VER" != 2.0.17 ]]; then
-        echo "⚠️  ESP32 core is $ESP32_VER, need 2.0.17 — reinstalling..."
-        arduino-cli core install esp32:esp32@2.0.17
+        echo "Installing ESP32 core ${ESP32_CORE_VERSION}..."
+        arduino-cli core install esp32:esp32@${ESP32_CORE_VERSION}
+    elif [[ "$ESP32_VER" != ${ESP32_CORE_VERSION} ]]; then
+        echo "ESP32 core is $ESP32_VER, need ${ESP32_CORE_VERSION} - reinstalling..."
+        arduino-cli core install esp32:esp32@${ESP32_CORE_VERSION}
     fi
 fi
 

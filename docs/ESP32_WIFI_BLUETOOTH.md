@@ -594,9 +594,9 @@ python -m pytest tests/test_esp32_wifi.py tests/test_esp32c3_wifi.py tests/test_
 - Ejemplo: `http.begin("http://httpbin.org/get")` funciona, `ping google.com` no
 
 ### La compilación falla
-- **ESP-IDF (producción)**: Los sketches ESP32 se compilan ahora con ESP-IDF 4.4.7 en lugar de arduino-cli. El backend traduce automáticamente Arduino WiFi/WebServer a ESP-IDF C nativo. Verifica que `IDF_PATH` esté configurado.
-- **Fallback arduino-cli**: Si ESP-IDF no está disponible, se usa arduino-cli. Instala el core:
+- **ESP-IDF (producción)**: Los sketches ESP32 se compilan con ESP-IDF 5.5.4 y el core arduino-esp32 3.3.10 en lugar de arduino-cli (lo mismo que velxio.dev). El backend traduce automáticamente Arduino WiFi/WebServer a ESP-IDF C nativo. Verifica que `IDF_PATH` esté configurado.
+- **Fallback arduino-cli**: Si ESP-IDF no está disponible, se usa arduino-cli. Instala el core 3.x:
   ```bash
-  arduino-cli core install esp32:esp32@2.0.17
+  arduino-cli core install esp32:esp32@3.3.9
   ```
 - El FQBN correcto es `esp32:esp32:esp32` (no `esp32:esp32:esp32dev`)

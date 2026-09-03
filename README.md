@@ -364,10 +364,11 @@ arduino-cli config add board_manager.additional_urls \
 arduino-cli core install ATTinyCore:avr
 ```
 
-> ESP32 (Xtensa) compilation in manual install requires the ESP-IDF 4.4.7
-> toolchain installed locally. The Docker image bundles this — for manual
-> installs see [docs/ESP32_EMULATION.md](docs/ESP32_EMULATION.md). If you
-> only need AVR / RP2040 boards you can skip ESP-IDF entirely.
+> ESP32 (Xtensa / RISC-V) compilation in a manual install requires ESP-IDF
+> v5.5.4 plus the arduino-esp32 3.3.10 core installed locally, the same pair
+> velxio.dev builds with. The Docker image bundles both — for manual installs
+> see [docs/ESP32_EMULATION.md](docs/ESP32_EMULATION.md). If you only need
+> AVR / RP2040 boards you can skip ESP-IDF entirely.
 
 ---
 

@@ -1,7 +1,7 @@
 # ESP32 Emulation (Xtensa) — Technical Documentation
 
 > Status: **Functional** · Backend complete · Frontend complete
-> Engine: **lcgamboa/qemu-8.1.3** · Platform: **arduino-esp32 2.0.17 (IDF 4.4.x)**
+> Engine: **libqemu 1.2.x (lcgamboa QEMU fork, 9.2 base)** · Platform: **arduino-esp32 3.3.10 (IDF 5.5.4)**
 > Available on: **Windows** (`.dll`) · **Linux / Docker** (`.so`, included in the official image)
 > Applies to: **ESP32, ESP32-S3** (Xtensa LX6/LX7 architecture)
 
@@ -83,26 +83,45 @@ pacman -S \
   git diffutils
 ```
 
-### 1.3 Install arduino-cli and the ESP32 2.0.17 Core
+### 1.3 Install the ESP32 toolchain (ESP-IDF 5.5.4 + arduino-esp32 3.3.10)
+
+The backend compiles ESP32-family sketches with ESP-IDF and the arduino-esp32
+core as a component. This is what the Docker image and velxio.dev use, so a
+sketch that builds on velxio.dev builds identically here.
 
 ```bash
-# Install arduino-cli (if not already installed)
-winget install ArduinoSA.arduino-cli
+# ESP-IDF v5.5.4 with every family toolchain
+git clone -b v5.5.4 --recursive --depth=1 --shallow-submodules \
+    https://github.com/espressif/esp-idf.git /opt/esp-idf-v5
+cd /opt/esp-idf-v5 && ./install.sh esp32,esp32s3,esp32c3,esp32c6
 
-# Verify
-arduino-cli version
-
-# Add ESP32 support
-arduino-cli core update-index
-arduino-cli core install esp32:esp32@2.0.17   # ← IMPORTANT: 2.x, NOT 3.x
-
-# Verify
-arduino-cli core list   # should show esp32:esp32  2.0.17
+# arduino-esp32 3.3.10 (IDF 5.5 based) as a component
+git clone --branch 3.3.10 --depth=1 --recursive --shallow-submodules \
+    https://github.com/espressif/arduino-esp32.git /opt/arduino-esp32-3
 ```
 
-> **Why 2.0.17 and not 3.x?** The lcgamboa emulated WiFi periodically disables the SPI flash cache.
-> In IDF 5.x (arduino-esp32 3.x) this causes a cache crash when core 0 interrupts
-> try to execute code from IROM. IDF 4.4.x has different, compatible cache behavior.
+`espidf_compiler` discovers both at those paths. Elsewhere, point it there
+with `IDF5_PATH` and `ARDUINO_ESP32_5_PATH` (and set `IDF_PATH` /
+`ARDUINO_ESP32_PATH` to the same trees for the code paths that read the
+legacy names). `VELXIO_ARDUINO_IDF5=0` forces a 4.4-era tree when one is
+installed alongside; `=1` forces v5.
+
+Without ESP-IDF the backend falls back to arduino-cli. Use the 3.x core
+there too, or velxio.dev sketches will not compile:
+
+```bash
+arduino-cli core update-index
+arduino-cli core install esp32:esp32@3.3.9   # newest 3.3.x in the board manager index
+arduino-cli core list                          # should show esp32:esp32  3.3.9
+```
+
+> **Why 3.x?** Until August 2026 this document pinned 2.0.17 because the
+> original qemu-8.1.3 WiFi shim crashed on IDF 5.x cache handling. The
+> current libqemu builds run IDF 5.x firmware, and velxio.dev moved to the
+> 3.x core. Sketches that still use APIs removed in 3.0 (`ledcSetup` /
+> `ledcAttachPin`, the old `timerBegin` signature, the `esp_now` receive
+> callback with a bare MAC pointer) need the changes from Espressif's
+> [2.x to 3.0 migration guide](https://docs.espressif.com/projects/arduino-esp32/en/latest/migration_guides/2.x_to_3.0.html).
 
 ### 1.4 Install esptool
 
@@ -558,16 +577,21 @@ manager.get_status(client_id)                         # → dict with runtime st
 
 ### 5.1 Required Platform Version
 
-**✅ Use: arduino-esp32 2.x (IDF 4.4.x)**
-**❌ Do not use: arduino-esp32 3.x (IDF 5.x)**
+**Use: arduino-esp32 3.3.10 on ESP-IDF 5.5.4** (the pair velxio.dev builds
+with; see section 1.3). With arduino-cli instead of ESP-IDF, use
+`esp32:esp32@3.3.9`.
 
-```bash
-arduino-cli core install esp32:esp32@2.0.17
-```
+arduino-esp32 2.0.17 (IDF 4.4.7) was the pin until August 2026 and still
+boots on libqemu, but sketches written on velxio.dev use 3.x APIs and do not
+compile against it.
 
-**Why:** The lcgamboa emulated WiFi (core 1) periodically disables the SPI flash cache. In IDF 5.x this causes a crash when core 0 interrupts try to execute code from IROM (flash cache). In IDF 4.4.x the cache behavior is different and compatible.
+**Historical note:** the 2.0.17 pin existed because the original qemu-8.1.3
+WiFi shim (core 1) periodically disabled the SPI flash cache, and IDF 5.x
+firmware crashed when core 0 interrupts executed from IROM. The current
+libqemu builds do not have that problem. If you run an old library you may
+still see it:
 
-**Crash message (IDF 5.x):**
+**Crash message (IDF 5.x on the old qemu-8.1.3 shim):**
 ```
 Guru Meditation Error: Core  / panic'ed (Cache error).
 Cache disabled but cached memory region accessed
@@ -632,7 +656,7 @@ void IRAM_ATTR setup() {
 void IRAM_ATTR loop() { ets_delay_us(1000000); }
 ```
 
-**Normal Arduino sketches** (with `Serial.print`, `delay`, `digitalWrite`) also work correctly with IDF 4.4.x.
+**Normal Arduino sketches** (with `Serial.print`, `delay`, `digitalWrite`) also work correctly with the current toolchain.
 
 ---
 
@@ -1148,7 +1172,7 @@ The connection logic lives in `SimulatorCanvas.tsx`: it detects the tag of the w
 | **No capacitive touch** | `touchRead()` has no callback in picsimlab | Not available |
 | **No DAC** | GPIO25/GPIO26 analog output not exposed by picsimlab | Not available |
 | **Fixed flash at 4MB** | Hardcoded in the esp32-picsimlab machine | Recompile the lib |
-| **arduino-esp32 3.x causes crash** | IDF 5.x handles cache differently from the emulated WiFi | Use 2.x (IDF 4.4.x) |
+| **2.x-era sketches fail to compile** | The toolchain is arduino-esp32 3.3.10; `ledcSetup` / `ledcAttachPin` and other 2.x-only APIs were removed in 3.0 | Follow Espressif's 2.x to 3.0 migration guide |
 | **ADC only on pins defined in `ESP32_ADC_PIN_MAP`** | The GPIO→ADC channel mapping is static in the frontend | Update `ESP32_ADC_PIN_MAP` in `Esp32Element.ts` |
 
 ---
