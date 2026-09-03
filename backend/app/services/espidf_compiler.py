@@ -244,6 +244,55 @@ def _run_with_streaming(
 _MAX_BUILD_VARIANTS = 6
 
 
+# One compile at a time per build variant. The build queue bounds how many
+# compiles run at once, not WHERE they run: two requests that hash to the same
+# variant (the deploy gate's smoke fired the S3 OLED example twice, 13 s
+# apart) shared one project dir, and the second configure walked into the
+# first one's half-copied managed component. The component manager then
+# reported it "corrupted" on every later attempt, and that variant was dead
+# until someone deleted it by hand (2026-09-03).
+_VARIANT_LOCKS: dict[str, asyncio.Lock] = {}
+_VARIANT_LOCKS_GUARD = threading.Lock()
+
+
+def _variant_lock(key: str) -> asyncio.Lock:
+    """The lock that serialises compiles inside one persistent build variant."""
+    with _VARIANT_LOCKS_GUARD:
+        lock = _VARIANT_LOCKS.get(key)
+        if lock is None:
+            lock = _VARIANT_LOCKS[key] = asyncio.Lock()
+        return lock
+
+
+_CORRUPT_COMPONENT_RE = re.compile(
+    r'The downloaded component "([^"]+)"\s+is\s+corrupted', re.IGNORECASE
+)
+
+
+def _corrupt_managed_component(stderr: str | None) -> str | None:
+    """Name of the managed component the IDF component manager refused as
+    corrupted (its message wraps across lines), or None for any other cmake
+    failure."""
+    m = _CORRUPT_COMPONENT_RE.search(stderr or '')
+    return m.group(1) if m else None
+
+
+def _heal_corrupt_managed_components(project_dir: Path, build_dir: Path) -> bool:
+    """Drop the variant's managed_components/ (the component manager copies
+    them back from its own intact cache on the next configure) and the cmake
+    cache that recorded them. Returns True when there was something to drop."""
+    removed = False
+    managed = project_dir / 'managed_components'
+    if managed.exists():
+        shutil.rmtree(managed, ignore_errors=True)
+        removed = True
+    cache = build_dir / 'CMakeCache.txt'
+    if cache.exists():
+        cache.unlink(missing_ok=True)
+        removed = True
+    return removed
+
+
 def _evict_cold_variants(target_dir: Path, keep: int) -> None:
     """LRU-evict variant dirs (``v_*``) beyond ``keep``, coldest mtime first."""
     try:
@@ -4307,17 +4356,21 @@ class ESPIDFCompiler:
             ).hexdigest()[:12]
             try:
                 if _USE_PERSISTENT_DIR:
-                    project_dir = _prepare_persistent_project_dir(idf_target, eff_hash)
-                    logger.info(f'[espidf] Using persistent build dir: {project_dir}')
-                    return await self._compile_in_dir(
-                        project_dir, files, idf_target,
-                        progress_callback, normalized_opts, spiffs_files,
-                        allowed_libraries=allowed, libraries_dir=scope_dir,
-                        arduino_mode=arduino_mode, use_idf5=use_idf5,
-                        pure_idf=pure_idf, board_fqbn=board_fqbn,
-                        custom_wifi_ssids=custom_wifi_ssids,
-                        denied_libraries=denied, speculative_out=speculative,
-                    )
+                    # Prepare AND build under the variant lock: prepare wipes main/ and
+                    # user_libs, and the configure populates managed_components/ - neither
+                    # survives a second compile landing in the same dir mid-way.
+                    async with _variant_lock(f'{idf_target}/{eff_hash}'):
+                        project_dir = _prepare_persistent_project_dir(idf_target, eff_hash)
+                        logger.info(f'[espidf] Using persistent build dir: {project_dir}')
+                        return await self._compile_in_dir(
+                            project_dir, files, idf_target,
+                            progress_callback, normalized_opts, spiffs_files,
+                            allowed_libraries=allowed, libraries_dir=scope_dir,
+                            arduino_mode=arduino_mode, use_idf5=use_idf5,
+                            pure_idf=pure_idf, board_fqbn=board_fqbn,
+                            custom_wifi_ssids=custom_wifi_ssids,
+                            denied_libraries=denied, speculative_out=speculative,
+                        )
                 with tempfile.TemporaryDirectory(prefix='espidf_') as temp_dir:
                     project_dir = Path(temp_dir) / 'project'
                     shutil.copytree(_TEMPLATE_DIR, project_dir)
@@ -4942,6 +4995,28 @@ class ESPIDFCompiler:
                 'stderr': '',
             }
 
+        if cmake_result.returncode != 0:
+            # A managed component left half-copied by an interrupted or
+            # concurrent configure makes the component manager refuse the
+            # whole variant for good ("is corrupted"). The copy in its own
+            # cache is intact, so drop the variant's copies and configure
+            # once more instead of failing every compile of this variant
+            # until the dir is deleted by hand.
+            corrupt = _corrupt_managed_component(cmake_result.stderr)
+            if corrupt and _heal_corrupt_managed_components(project_dir, build_dir):
+                logger.warning(
+                    f'[espidf] managed component "{corrupt}" corrupted in '
+                    f'{project_dir}; dropped managed_components/ and reconfiguring'
+                )
+                try:
+                    cmake_result = await asyncio.to_thread(_run_cmake)
+                except subprocess.TimeoutExpired:
+                    return {
+                        'success': False,
+                        'error': f'ESP-IDF cmake reconfigure timed out ({cmake_timeout}s)',
+                        'stdout': '',
+                        'stderr': '',
+                    }
         if cmake_result.returncode != 0:
             logger.error(f'[espidf] cmake failed:\n{cmake_result.stderr}')
             return {
