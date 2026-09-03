@@ -93,16 +93,31 @@ export const AppHeader: React.FC<AppHeaderProps> = ({ editorMenu, editorToolbar 
     };
   }, [hasStrip]);
 
-  // Tauri desktop: skip the header entirely. The marketing nav was
-  // already hidden, but the strip itself was still painting an empty
-  // black bar over the editor. Brand/auto-save/share/auth-slot all
-  // live elsewhere in desktop: title bar shows "Velxio Desktop", the
-  // native menubar has File/Edit/View/Help, auto-save is a Pro cloud
-  // feature (desktop saves to .vlx), share generates a velxio.dev URL
-  // that doesn't apply to a desktop session, and the license flow
-  // owns its own DesktopWelcomePage.
+  // Tauri desktop: no brand row. Brand/auto-save/share/auth-slot all live
+  // elsewhere in desktop: the title bar shows "Velxio Desktop", the native
+  // menubar has File/Edit/View/Help, auto-save is a Pro cloud feature
+  // (desktop saves to .vlx), share generates a velxio.dev URL that doesn't
+  // apply to a desktop session, and the license flow owns its own
+  // DesktopWelcomePage.
+  //
+  // This used to `return null` outright, back when the strip below the
+  // header was empty in desktop and painted a black bar. Since the editor
+  // toolbar strip (Compile / Run / Libraries, board + canvas controls)
+  // moved INSIDE this header (`editorToolbar`, 2026-08), that early return
+  // dropped the whole strip from the desktop app: 0.4.7 shipped with no
+  // Compile, Run or Libraries button. Render the strip alone, in the same
+  // .header-content > .header-editor-toolbar structure headerStripFit.ts
+  // measures, with an empty .header-left so the whole row is toolbar.
   if (import.meta.env.VITE_DESKTOP) {
-    return null;
+    if (!editorToolbar) return null;
+    return (
+      <header ref={headerRef} className="app-header app-header--with-toolbar app-header--desktop">
+        <div className="header-content">
+          <div className="header-left" />
+          <div className="header-editor-toolbar">{editorToolbar}</div>
+        </div>
+      </header>
+    );
   }
 
   // Compare with the trailing slash ignored: /editor is served (and
