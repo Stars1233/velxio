@@ -26,6 +26,9 @@ export type EditorCommandId =
   | 'project.exportBom'
   | 'project.exportScreenshot'
   | 'file.new'
+  // Monaco's own Format Document action, registered by CodeEditor while the
+  // open file has a formatter (C/C++, Python, JSON) — see codeFormatters.ts.
+  | 'edit.formatDocument'
   // Account-scoped, registered ONLY by the pro overlay and only in the
   // matching session state (myProjects when signed in, login when not).
   // OSS has no auth at all, so both stay unregistered here and the menu

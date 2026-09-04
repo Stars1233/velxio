@@ -378,6 +378,9 @@
         "both": "NL et CR"
       }
     },
+    "format": {
+      "failed": "Impossible de formater le fichier"
+    },
     "menu": {
       "file": "Fichier",
       "edit": "Édition",
@@ -390,6 +393,7 @@
       "save": "Enregistrer le projet",
       "undo": "Annuler",
       "redo": "Rétablir",
+      "formatDocument": "Formater le document",
       "centerView": "Centrer la vue du canevas",
       "toggleExplorer": "Explorateur de fichiers",
       "toggleConsole": "Console de sortie",

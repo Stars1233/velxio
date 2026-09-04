@@ -378,6 +378,9 @@
         "both": "Entrambi NL e CR"
       }
     },
+    "format": {
+      "failed": "Impossibile formattare il file"
+    },
     "menu": {
       "file": "File",
       "edit": "Modifica",
@@ -390,6 +393,7 @@
       "save": "Salva progetto",
       "undo": "Annulla",
       "redo": "Ripeti",
+      "formatDocument": "Formatta documento",
       "centerView": "Centra la vista del canvas",
       "toggleExplorer": "Esplora file",
       "toggleConsole": "Console di output",

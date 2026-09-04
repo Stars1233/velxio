@@ -199,9 +199,18 @@ export const EditorMenuBar: React.FC = () => {
     { kind: 'link', href: GITHUB_URL, label: t('editor.menu.github', 'GitHub Repository') },
   ];
 
-  // Edit is undo/redo only (they render specially, with live history state);
-  // everything view-shaped lives in the View menu, like the desktop app.
-  const editItems: Item[] = [];
+  // Undo/redo render specially above (live canvas history state); the rest
+  // of Edit is the code editor's own actions. Everything view-shaped lives
+  // in the View menu, like the desktop app.
+  const editItems: Item[] = [
+    { kind: 'separator' },
+    {
+      kind: 'command',
+      id: 'edit.formatDocument',
+      label: t('editor.menu.formatDocument', 'Format document'),
+      shortcut: 'Shift+Alt+F',
+    },
+  ];
 
   // File Explorer is rendered as a checkmarked row in the View block below
   // (it reads the store), not as a plain command here.
