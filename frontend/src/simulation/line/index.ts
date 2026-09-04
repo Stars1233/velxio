@@ -5,6 +5,7 @@
  */
 
 export * from './padEvent';
+export { PadBus } from './padBus';
 export * from './LineTimeline';
 export * from './lineModels';
 export * from './LineHost';

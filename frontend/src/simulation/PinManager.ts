@@ -17,14 +17,8 @@
  */
 
 import { requestElectricalResolve } from './spice/electricalResolveHook';
-import {
-  INITIAL_PAD,
-  restingLevel,
-  type PadDrive,
-  type PadEvent,
-  type PadPull,
-  type PadState,
-} from './line/padEvent';
+import type { PadDrive, PadEvent, PadPull, PadState } from './line/padEvent';
+import { PadBus } from './line/padBus';
 
 export type PinState = boolean;
 export type PinChangeCallback = (pin: number, state: PinState) => void;
@@ -60,40 +54,26 @@ export class PinManager {
   // to RELEASE its wire, a direction change that moves no level, and only
   // this channel carries it. Fed by the simulators through `reportPad`;
   // consumed through `onPadChange`. Never fired by host-side writes.
-  private padStates: Map<number, PadState> = new Map();
-  private padListeners: Map<number, Set<(e: PadEvent) => void>> = new Map();
+  private readonly pads = new PadBus();
 
   /** Subscribe to guest drive-state changes on one pad. */
   onPadChange(pin: number, callback: (e: PadEvent) => void): () => void {
-    if (!this.padListeners.has(pin)) this.padListeners.set(pin, new Set());
-    this.padListeners.get(pin)!.add(callback);
-    return () => {
-      this.padListeners.get(pin)?.delete(callback);
-    };
+    return this.pads.onPad(pin, callback);
   }
 
   /** The pad's current drive state (released with no pull until reported). */
   getPad(pin: number): Readonly<PadState> {
-    return this.padStates.get(pin) ?? INITIAL_PAD;
+    return this.pads.get(pin);
   }
 
   /**
    * SIMULATOR -> listeners. Report what the guest did to a pad. Fires only on
-   * a real change of drive or pull; the resting level is derived here so no
-   * simulator computes it. Does NOT touch `pinStates` or fire `onPinChange` —
-   * the level channel keeps its own semantics, and the two must not double
-   * fire for a plain digitalWrite.
+   * a real change of drive or pull. Does NOT touch `pinStates` or fire
+   * `onPinChange` — the level channel keeps its own semantics, and the two
+   * must not double fire for a plain digitalWrite.
    */
   reportPad(pin: number, drive: PadDrive, pull: PadPull, cycle: number): void {
-    const prev = this.padStates.get(pin) ?? INITIAL_PAD;
-    if (prev.drive === drive && prev.pull === pull) return;
-    const level = restingLevel(drive, pull, prev.level);
-    const next: PadState = { drive, pull, level, cycle };
-    this.padStates.set(pin, next);
-    const callbacks = this.padListeners.get(pin);
-    if (!callbacks || callbacks.size === 0) return;
-    const event: PadEvent = { pin, ...next, prev };
-    callbacks.forEach((cb) => cb(event));
+    this.pads.report(pin, drive, pull, cycle);
   }
 
   // ── Digital pin API ──────────────────────────────────────────────────────
@@ -301,7 +281,7 @@ export class PinManager {
     this.pinPulls.clear();
     // A cold boot releases every pad; the firmware re-configures each one from
     // setup(), and the next `reportPad` must see that as a change.
-    this.padStates.clear();
+    this.pads.clear();
     for (const pin of wereHigh) {
       const callbacks = this.listeners.get(pin);
       if (callbacks) {
