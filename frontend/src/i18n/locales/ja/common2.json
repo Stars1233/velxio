@@ -378,6 +378,9 @@
         "both": "NL と CR の両方"
       }
     },
+    "format": {
+      "failed": "ファイルをフォーマットできませんでした"
+    },
     "menu": {
       "file": "ファイル",
       "edit": "編集",
@@ -390,6 +393,7 @@
       "save": "プロジェクトを保存",
       "undo": "元に戻す",
       "redo": "やり直す",
+      "formatDocument": "ドキュメントをフォーマット",
       "centerView": "キャンバス表示を中央に",
       "toggleExplorer": "ファイルエクスプローラー",
       "toggleConsole": "出力コンソール",

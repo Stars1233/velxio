@@ -387,6 +387,9 @@
         "both": "Ambos NL y CR"
       }
     },
+    "format": {
+      "failed": "No se pudo formatear el archivo"
+    },
     "menu": {
       "file": "Archivo",
       "edit": "Edición",
@@ -400,6 +403,7 @@
       "save": "Guardar proyecto",
       "undo": "Deshacer",
       "redo": "Rehacer",
+      "formatDocument": "Formatear documento",
       "centerView": "Centrar vista del lienzo",
       "toggleExplorer": "Explorador de archivos",
       "toggleConsole": "Consola de salida",

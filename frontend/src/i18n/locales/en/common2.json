@@ -410,6 +410,9 @@
         "both": "Both NL & CR"
       }
     },
+    "format": {
+      "failed": "Could not format the file"
+    },
     "menu": {
       "file": "File",
       "edit": "Edit",
@@ -423,6 +426,7 @@
       "save": "Save project",
       "undo": "Undo",
       "redo": "Redo",
+      "formatDocument": "Format document",
       "centerView": "Center canvas view",
       "toggleExplorer": "File Explorer",
       "toggleConsole": "Output Console",

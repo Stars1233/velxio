@@ -34,6 +34,8 @@
     "@monaco-editor/react": "^4.7.0",
     "@tanstack/react-table": "^8.20.5",
     "@types/react-syntax-highlighter": "^15.5.13",
+    "@wasm-fmt/clang-format": "22.1.8",
+    "@wasm-fmt/ruff_fmt": "0.15.20",
     "@wokwi/elements": "1.9.2",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",

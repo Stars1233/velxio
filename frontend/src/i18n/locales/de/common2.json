@@ -378,6 +378,9 @@
         "both": "Beides NL & CR"
       }
     },
+    "format": {
+      "failed": "Die Datei konnte nicht formatiert werden"
+    },
     "menu": {
       "file": "Datei",
       "edit": "Bearbeiten",
@@ -390,6 +393,7 @@
       "save": "Projekt speichern",
       "undo": "Rückgängig",
       "redo": "Wiederholen",
+      "formatDocument": "Dokument formatieren",
       "centerView": "Canvas-Ansicht zentrieren",
       "toggleExplorer": "Datei-Explorer",
       "toggleConsole": "Ausgabekonsole",

@@ -378,6 +378,9 @@
         "both": "换行和回车"
       }
     },
+    "format": {
+      "failed": "无法格式化文件"
+    },
     "menu": {
       "file": "文件",
       "edit": "编辑",
@@ -390,6 +393,7 @@
       "save": "保存项目",
       "undo": "撤销",
       "redo": "重做",
+      "formatDocument": "格式化文档",
       "centerView": "居中画布视图",
       "toggleExplorer": "文件资源管理器",
       "toggleConsole": "输出控制台",
