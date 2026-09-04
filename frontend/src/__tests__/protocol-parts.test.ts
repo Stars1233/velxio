@@ -16,6 +16,10 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PartSimulationRegistry } from '../simulation/parts/PartSimulationRegistry';
+import { LineSensorHub } from '../simulation/line/LineSensorHub';
+import type { LineHostPort } from '../simulation/line/LineHost';
+import { INITIAL_PAD, type PadEvent, type PadState } from '../simulation/line/padEvent';
+import { clearLineGaps, lineGaps } from '../simulation/line/requestLine';
 import { dispatchSensorUpdate } from '../simulation/SensorUpdateRegistry';
 import { useSimulatorStore } from '../store/useSimulatorStore';
 import '../simulation/parts/ProtocolParts';
@@ -344,58 +348,101 @@ describe('mpu6050 — I2C IMU', () => {
 
 // ─── dht22 ───────────────────────────────────────────────────────────────────
 
-describe('dht22 — single-wire sensor', () => {
-  it('sets DATA pin HIGH (idle) on attach', () => {
-    const sim = makePinSim();
+describe('dht22 — single-wire sensor (the line contract)', () => {
+  /** A board that hosts line models itself, over a fake port. */
+  function makeLineSim() {
+    const listeners = new Map<number, Set<(e: PadEvent) => void>>();
+    const port: LineHostPort & { edges: Array<[number, boolean, number]>; rests: Array<[number, boolean, boolean]> } = {
+      edges: [],
+      rests: [],
+      now: () => 10_000,
+      clockHz: () => 16e6,
+      scheduleEdge: (pin, level, at) => port.edges.push([pin, level, at]),
+      onPad: (pin, cb) => {
+        if (!listeners.has(pin)) listeners.set(pin, new Set());
+        listeners.get(pin)!.add(cb);
+        return () => listeners.get(pin)!.delete(cb);
+      },
+      restPad: (pin, level, driven) => port.rests.push([pin, level, driven]),
+    };
+    const hub = new LineSensorHub(port);
+    const sim = {
+      ...makePinSim(),
+      lineSupport: () => ({ mode: 'local' as const }),
+      lineHub: () => hub,
+      /** Emit the guest's drive changes the way a simulator would. */
+      guest(pin: number, drives: Array<PadState['drive']>) {
+        let prev: PadState = INITIAL_PAD;
+        for (const drive of drives) {
+          const next: PadState = { drive, pull: drive === 'z' ? 1 : 0, level: drive !== 'low', cycle: 10_000 };
+          listeners.get(pin)?.forEach((cb) => cb({ pin, ...next, prev }));
+          prev = next;
+        }
+      },
+    };
+    return { sim, hub, port };
+  }
+
+  it('asks the board to host it and rests DATA released on its pull-up', () => {
+    const { sim, hub, port } = makeLineSim();
     const logic = PartSimulationRegistry.get('dht22')!;
-    logic.attachEvents!(makeElement(), sim as any, pinMap({ DATA: 7 }));
-    expect(sim.setPinState).toHaveBeenCalledWith(7, true);
+    logic.attachEvents!(makeElement(), sim as any, pinMap({ DATA: 7 }), 'dht-1');
+    expect(hub.size).toBe(1);
+    expect(hub.ownsPin(7)).toBe(true);
+    expect(port.rests).toEqual([[7, true, false]]);
   });
 
-  it('registers onPinChange for DATA pin', () => {
-    const sim = makePinSim();
+  it('answers the start signal (LOW, then release) with the 84-edge frame', () => {
+    const { sim, port } = makeLineSim();
     const logic = PartSimulationRegistry.get('dht22')!;
-    logic.attachEvents!(makeElement(), sim as any, pinMap({ DATA: 7 }));
-    expect(sim.pinManager.onPinChange).toHaveBeenCalledWith(7, expect.any(Function));
+    logic.attachEvents!(makeElement({ temperature: 25.0, humidity: 50.0 }), sim as any, pinMap({ DATA: 7 }), 'dht-2');
+    sim.guest(7, ['high', 'low', 'z']);
+    expect(port.edges).toHaveLength(84);
+    expect(port.edges[0]).toEqual([7, false, 10_000 + 16 * 20]);
   });
 
-  it('drives DATA in response after LOW → HIGH start sequence', () => {
-    const sim = makePinSim();
+  it('forwards slider changes to the host', () => {
+    const { sim, hub } = makeLineSim();
     const logic = PartSimulationRegistry.get('dht22')!;
-    logic.attachEvents!(
-      makeElement({ temperature: 25.0, humidity: 50.0 }),
-      sim as any,
-      pinMap({ DATA: 7 }),
-    );
-
-    const cb = sim.pinManager.onPinChange.mock.calls[0][1] as (pin: number, state: boolean) => void;
-    sim.setPinState.mockClear();
-
-    cb(7, false); // MCU pulls DATA LOW  (start signal)
-    cb(7, true); // MCU releases DATA HIGH → DHT22 should begin response
-
-    // Response should include at least one LOW pulse
-    const calls = (sim.setPinState as ReturnType<typeof vi.fn>).mock.calls;
-    expect(calls.some(([, s]) => s === false)).toBe(true);
+    const el = makeElement({ temperature: 25.0, humidity: 50.0 }) as any;
+    logic.attachEvents!(el, sim as any, pinMap({ DATA: 7 }), 'dht-3');
+    const spy = vi.spyOn(hub, 'update');
+    dispatchSensorUpdate('dht-3', { temperature: 31 });
+    expect(el.temperature).toBe(31);
+    expect(spy).toHaveBeenCalledWith(7, { temperature: 31, humidity: 50 });
   });
 
   it('no-op if DATA pin not found', () => {
-    const sim = makePinSim();
+    const { sim, hub } = makeLineSim();
     const logic = PartSimulationRegistry.get('dht22')!;
     expect(() => {
-      const c = logic.attachEvents!(makeElement(), sim as any, noPins);
+      const c = logic.attachEvents!(makeElement(), sim as any, noPins, 'dht-4');
       c();
     }).not.toThrow();
-    expect(sim.pinManager.onPinChange).not.toHaveBeenCalled();
+    expect(hub.size).toBe(0);
   });
 
-  it('cleanup drives DATA HIGH', () => {
-    const sim = makePinSim();
+  it('cleanup releases the line', () => {
+    const { sim, hub } = makeLineSim();
     const logic = PartSimulationRegistry.get('dht22')!;
-    const cleanup = logic.attachEvents!(makeElement(), sim as any, pinMap({ DATA: 7 }));
-    sim.setPinState.mockClear();
+    const cleanup = logic.attachEvents!(makeElement(), sim as any, pinMap({ DATA: 7 }), 'dht-5');
     cleanup();
-    expect(sim.setPinState).toHaveBeenCalledWith(7, true);
+    expect(hub.size).toBe(0);
+    expect(hub.ownsPin(7)).toBe(false);
+  });
+
+  it('on a board that cannot host it, refuses out loud and drives nothing', () => {
+    clearLineGaps();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const sim = makePinSim(); // no declaration at all
+    const logic = PartSimulationRegistry.get('dht22')!;
+    const cleanup = logic.attachEvents!(makeElement(), sim as any, pinMap({ DATA: 7 }), 'dht-6');
+    expect(sim.setPinState).not.toHaveBeenCalled();
+    expect(sim.pinManager.onPinChange).not.toHaveBeenCalled();
+    expect(lineGaps()).toContainEqual({ sensorType: 'dht22', pin: 7, why: expect.any(String), componentId: 'dht-6' });
+    expect(warn).toHaveBeenCalled();
+    expect(() => cleanup()).not.toThrow();
+    warn.mockRestore();
   });
 });
 

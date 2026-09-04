@@ -35,6 +35,8 @@ import type { AVRTimerConfig } from 'avr8js/dist/esm/peripherals/timer';
 import type { ADCConfig, ADCMuxConfiguration } from 'avr8js/dist/esm/peripherals/adc';
 import { ADCMuxInputType, ADCReference } from 'avr8js/dist/esm/peripherals/adc';
 import { PinManager } from './PinManager';
+import type { LineCapable, LineHostPort, LineSupport } from './line/LineHost';
+import { LineSensorHub } from './line/LineSensorHub';
 import { hexToUint8Array } from '../utils/hexParser';
 import { I2CBusManager, nullI2CMaster } from './I2CBusManager';
 import type { I2CDevice } from './I2CBusManager';
@@ -294,7 +296,7 @@ const MEGA_PORT_CONFIGS = [
   { name: 'PORTL', config: portLConfig },
 ];
 
-export class AVRSimulator {
+export class AVRSimulator implements LineCapable {
   // Digital input pins are driven from the SPICE solve
   // (connectDigitalInputsToMcu) for nets backed by a real source/element, so
   // `digitalRead()` reflects the real wiring (a pin wired to 5V reads HIGH, a
@@ -340,8 +342,10 @@ export class AVRSimulator {
   /** 'uno' for ATmega328P boards (Uno, Nano); 'mega' for ATmega2560; 'tiny85' for ATtiny85 */
   private boardVariant: 'uno' | 'mega' | 'tiny85';
 
-  /** Cycle-accurate pin change queue — used by timing-sensitive peripherals (e.g. DHT22). */
+  /** Cycle-accurate pin change queue, flushed after every instruction. */
   private scheduledPinChanges: Array<{ cycle: number; pin: number; state: boolean }> = [];
+  /** Line-owning sensor models hosted on this CPU (simulation/line). Built lazily: it closes over the port below. */
+  private lines: LineSensorHub | null = null;
 
   /** Serial output buffer — subscribers receive each byte or line */
   public onSerialData: ((char: string) => void) | null = null;
@@ -356,6 +360,11 @@ export class AVRSimulator {
   private lastPortBValue = 0;
   private lastPortCValue = 0;
   private lastPortDValue = 0;
+  // Last DDR seen per port. avr8js calls a port listener on a DDR change even
+  // when the masked value is unchanged, and the release of a single-wire line
+  // (DDR 1 -> 0 with PORT already what it was) is exactly such a change: it
+  // must reach PinManager.updatePort so the pad's drive state is reported.
+  private lastDdr: Map<string, number> = new Map();
   private lastOcrValues: number[] = [];
   /**
    * Last known TXEN bit value, used to detect 0→1 transitions and seed the
@@ -567,6 +576,7 @@ export class AVRSimulator {
     this.lastPortBValue = 0;
     this.lastPortCValue = 0;
     this.lastPortDValue = 0;
+    this.lastDdr.clear();
     this.lastOcrValues = new Array(this.pwmPins.length).fill(0);
 
     this.setupPinHooks();
@@ -750,10 +760,12 @@ export class AVRSimulator {
       // legacy PORTB offset (8) which would map PB1 → pin 9, etc.
       const TINY85_PIN_MAP = [0, 1, 2, 3, 4, 5, -1, -1];
       this.portB!.addListener((value) => {
-        if (value !== this.lastPortBValue) {
-          this.pinManager.updatePort('PORTB', value, this.lastPortBValue, TINY85_PIN_MAP, readDdr(0x37));
+        const ddr = readDdr(0x37);
+        if (value !== this.lastPortBValue || ddr !== this.lastDdr.get('PORTB')) {
+          this.pinManager.updatePort('PORTB', value, this.lastPortBValue, TINY85_PIN_MAP, ddr, cpu.cycles);
           this.firePinChangeWithTime(value, this.lastPortBValue, null, 0);
           this.lastPortBValue = value;
+          this.lastDdr.set('PORTB', ddr);
         }
       });
     } else if (this.boardVariant === 'mega') {
@@ -769,34 +781,42 @@ export class AVRSimulator {
         this.megaPortValues.set(portName, 0);
         port.addListener((value) => {
           const old = this.megaPortValues.get(portName) ?? 0;
-          if (value !== old) {
-            this.pinManager.updatePort(portName, value, old, pinMap, ddrAddr ? readDdr(ddrAddr) : undefined);
+          const ddr = ddrAddr ? readDdr(ddrAddr) : undefined;
+          if (value !== old || ddr !== this.lastDdr.get(portName)) {
+            this.pinManager.updatePort(portName, value, old, pinMap, ddr, cpu.cycles);
             this.firePinChangeWithTime(value, old, pinMap);
             this.megaPortValues.set(portName, value);
+            if (ddr !== undefined) this.lastDdr.set(portName, ddr);
           }
         });
       }
     } else {
       // Uno / Nano: simple 3-port setup
       this.portB!.addListener((value) => {
-        if (value !== this.lastPortBValue) {
-          this.pinManager.updatePort('PORTB', value, this.lastPortBValue, undefined, readDdr(0x24));
+        const ddr = readDdr(0x24);
+        if (value !== this.lastPortBValue || ddr !== this.lastDdr.get('PORTB')) {
+          this.pinManager.updatePort('PORTB', value, this.lastPortBValue, undefined, ddr, cpu.cycles);
           this.firePinChangeWithTime(value, this.lastPortBValue, null, 8);
           this.lastPortBValue = value;
+          this.lastDdr.set('PORTB', ddr);
         }
       });
       this.portC!.addListener((value) => {
-        if (value !== this.lastPortCValue) {
-          this.pinManager.updatePort('PORTC', value, this.lastPortCValue, undefined, readDdr(0x27));
+        const ddr = readDdr(0x27);
+        if (value !== this.lastPortCValue || ddr !== this.lastDdr.get('PORTC')) {
+          this.pinManager.updatePort('PORTC', value, this.lastPortCValue, undefined, ddr, cpu.cycles);
           this.firePinChangeWithTime(value, this.lastPortCValue, null, 14);
           this.lastPortCValue = value;
+          this.lastDdr.set('PORTC', ddr);
         }
       });
       this.portD!.addListener((value) => {
-        if (value !== this.lastPortDValue) {
-          this.pinManager.updatePort('PORTD', value, this.lastPortDValue, undefined, readDdr(0x2A));
+        const ddr = readDdr(0x2A);
+        if (value !== this.lastPortDValue || ddr !== this.lastDdr.get('PORTD')) {
+          this.pinManager.updatePort('PORTD', value, this.lastPortDValue, undefined, ddr, cpu.cycles);
           this.firePinChangeWithTime(value, this.lastPortDValue, null, 0);
           this.lastPortDValue = value;
+          this.lastDdr.set('PORTD', ddr);
         }
       });
     }
@@ -921,6 +941,7 @@ export class AVRSimulator {
       this.animationFrame = null;
     }
     this.scheduledPinChanges = [];
+    this.lines?.reset();
 
     // Drop any bytes the previous run had queued for the sketch's RX
     // but never delivered (RX disabled, busy, or the sketch hadn't
@@ -937,6 +958,11 @@ export class AVRSimulator {
    */
   reset(): void {
     this.stop();
+    // A reset is a reboot whether or not the loop was running (stop() returns
+    // early when it was not): the edge queue and every hosted line model start
+    // over with the CPU.
+    this.scheduledPinChanges = [];
+    this.lines?.reset();
     if (this.program) {
       // Re-use the stored hex content path: just reload
       const sramBytes =
@@ -1024,10 +1050,13 @@ export class AVRSimulator {
     return this.speed;
   }
 
+  /** One instruction, exactly as the frame loop runs it: execute, tick, and
+   *  apply every scheduled pin edge that came due. */
   step(): void {
     if (!this.cpu) return;
     avrInstruction(this.cpu);
     this.cpu.tick();
+    if (this.scheduledPinChanges.length > 0) this.flushScheduledPinChanges();
   }
 
   /**
@@ -1154,9 +1183,39 @@ export class AVRSimulator {
     return this.i2cBus;
   }
 
-  // ── Generic sensor registration (board-agnostic API) ──────────────────────
-  // AVR handles all sensor protocols locally via schedulePinChange,
-  // so these return false / no-op — the sensor runs its own frontend logic.
+  // ── Line-owning sensors (simulation/line) ─────────────────────────────────
+  // The models run here, in the browser, on this CPU's own cycle counter:
+  // edges are flushed after every instruction and nothing in this family
+  // advances the clock without executing, so the contract holds by
+  // construction. The legacy `registerSensor` stays a no-op for callers that
+  // still probe it; the line contract is the path a part takes.
+
+  lineSupport(): LineSupport {
+    return { mode: 'local' };
+  }
+
+  lineHub(): LineSensorHub {
+    if (!this.lines) {
+      const port: LineHostPort = {
+        now: () => this.getCurrentCycles(),
+        clockHz: () => this.getClockHz(),
+        scheduleEdge: (pin, level, atCycle) => this.schedulePinChange(pin, level, atCycle),
+        onPad: (pin, cb) => this.pinManager.onPadChange(pin, cb),
+        // avr8js has no notion of a host-owned pad: an injected level simply
+        // becomes the PIN register's value, and a released line on its pull-up
+        // reads exactly the level the pull produces. Seeding it is the rest.
+        restPad: (pin, level) => this.setPinState(pin, level),
+      };
+      this.lines = new LineSensorHub(port);
+    }
+    return this.lines;
+  }
+
+  /** Pads a hosted line model drives itself — the SPICE-threshold connector
+   *  asks before pushing a solved level into the guest (connectDigitalInputsToMcu). */
+  ownsPin(pin: number): boolean {
+    return this.lines?.ownsPin(pin) ?? false;
+  }
 
   registerSensor(_type: string, _pin: number, _props: Record<string, unknown>): boolean {
     return false;

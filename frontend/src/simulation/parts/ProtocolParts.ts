@@ -19,6 +19,7 @@
  */
 
 import { PartSimulationRegistry } from './PartSimulationRegistry';
+import { requestLine } from '../line/requestLine';
 import { VirtualDS1307, VirtualBMP280, VirtualDS3231, VirtualPCF8574 } from '../I2CBusManager';
 import type { I2CDevice } from '../I2CBusManager';
 import { HD44780Decoder } from '../HD44780Decoder';
@@ -597,196 +598,42 @@ PartSimulationRegistry.register('mpu6050', {
 // ─── DHT22 Temperature / Humidity Sensor ─────────────────────────────────────
 
 /**
- * DHT22 (AM2302) — single-wire bidirectional protocol.
+ * DHT22 (AM2302) — a line-owning sensor. The protocol (start signal, 40-bit
+ * self-timed reply on the same wire) is the MODEL in simulation/line/models/
+ * dht22.ts, hosted by whichever board the part is wired to under the line
+ * contract. This part only binds the canvas element to that contract: it says
+ * what it is and where it sits, forwards slider changes, and shows the
+ * board's answer when the board cannot host it.
  *
- * Protocol summary:
- *  1. MCU drives DATA LOW for ≥1 ms  (start signal)
- *  2. MCU releases DATA HIGH
- *  3. DHT22 drives: 80 µs LOW → 80 µs HIGH (response)
- *  4. DHT22 transmits 40 bits: each bit = 50 µs LOW + (26 µs=0 | 70 µs=1) HIGH
- *  5. Data layout: [humidity_H, humidity_L, temp_H, temp_L, checksum]
- *     Humidity in 0.1%, Temperature in 0.1°C (MSB = sign for temp)
- *
- * TIMING NOTE:
- *  Full µs-accuracy requires injecting pin changes inside the CPU execution
- *  loop. This implementation drives DATA via setPinState() after detecting the
- *  start sequence. It works with simple polling-based DHT22 code. The standard
- *  Arduino DHT library uses pulseIn() counts; exact cycle-accuracy is not
- *  achievable without modifying the AVR execution loop.
- *
- * Default values: 50.0% humidity, 25.0°C temperature.
- * These can be changed by setting element properties: `el.temperature`, `el.humidity`.
+ * Default values: 50.0% humidity, 25.0 C. Change via `el.temperature` /
+ * `el.humidity`.
  */
-function buildDHT22Payload(element: HTMLElement): Uint8Array {
-  const el = element as any;
-  const humidity = Math.round((el.humidity ?? 50.0) * 10); // tenths of %
-  const temperature = Math.round((el.temperature ?? 25.0) * 10); // tenths of °C
-  const h_H = (humidity >> 8) & 0xff;
-  const h_L = humidity & 0xff;
-  // Temperature sign bit is bit 15 of the 16-bit value
-  const rawTemp = temperature < 0 ? (-temperature & 0x7fff) | 0x8000 : temperature & 0x7fff;
-  const t_H = (rawTemp >> 8) & 0xff;
-  const t_L = rawTemp & 0xff;
-  const chk = (h_H + h_L + t_H + t_L) & 0xff;
-  return new Uint8Array([h_H, h_L, t_H, t_L, chk]);
-}
-
-/**
- * Schedule the full DHT22 waveform on DATA using cycle-accurate pin changes.
- *
- * DHT22 protocol (after MCU releases DATA HIGH):
- *  - 80 µs LOW  → 80 µs HIGH  (response preamble)
- *  - 40 bits, each: 50 µs LOW + (26 µs HIGH = '0', 70 µs HIGH = '1')
- *  - Line released HIGH after last bit
- *
- * At 16 MHz: 1 µs = 16 cycles
- *  - 80 µs = 1280 cycles, 50 µs = 800 cycles, 26 µs = 416 cycles, 70 µs = 1120 cycles
- */
-function scheduleDHT22Response(simulator: any, pin: number, element: HTMLElement): void {
-  if (typeof simulator.schedulePinChange !== 'function') {
-    // Fallback: synchronous drive (legacy / non-AVR simulators)
-    const payload = buildDHT22Payload(element);
-    simulator.setPinState(pin, false);
-    simulator.setPinState(pin, true);
-    for (const byte of payload) {
-      for (let b = 7; b >= 0; b--) {
-        const bit = (byte >> b) & 1;
-        simulator.setPinState(pin, false);
-        simulator.setPinState(pin, !!bit);
-      }
-    }
-    simulator.setPinState(pin, true);
-    return;
-  }
-
-  const payload = buildDHT22Payload(element);
-  const now = simulator.getCurrentCycles() as number;
-
-  // Scale timing by CPU clock — AVR runs at 16 MHz, RP2040 at 125 MHz.
-  const clockHz: number =
-    typeof simulator.getClockHz === 'function' ? simulator.getClockHz() : 16_000_000;
-  const us = (microseconds: number) => Math.round((microseconds * clockHz) / 1_000_000);
-
-  const RESPONSE_START = us(20); // DHT22 response start (~20 µs after MCU releases)
-  const LOW80 = us(80); // 80 µs LOW preamble
-  const HIGH80 = us(80); // 80 µs HIGH preamble
-  const LOW50 = us(50); // 50 µs LOW marker before each bit
-  const HIGH0 = us(26); // 26 µs HIGH → bit '0'
-  const HIGH1 = us(70); // 70 µs HIGH → bit '1'
-
-  let t = now + RESPONSE_START;
-
-  // Preamble: 80 µs LOW
-  simulator.schedulePinChange(pin, false, t);
-  t += LOW80;
-  // Preamble: 80 µs HIGH
-  simulator.schedulePinChange(pin, true, t);
-  t += HIGH80;
-
-  // 40 data bits, MSB first — schedule LOW then advance, schedule HIGH then advance
-  for (const byte of payload) {
-    for (let b = 7; b >= 0; b--) {
-      const bit = (byte >> b) & 1;
-      simulator.schedulePinChange(pin, false, t);
-      t += LOW50;
-      simulator.schedulePinChange(pin, true, t);
-      t += bit ? HIGH1 : HIGH0;
-    }
-  }
-
-  // Final release
-  simulator.schedulePinChange(pin, false, t);
-  t += LOW50;
-  simulator.schedulePinChange(pin, true, t);
-}
-
 PartSimulationRegistry.register('dht22', {
   attachEvents: (element, simulator, getPin, componentId) => {
     // wokwi-dht22 element uses 'SDA' as the data pin name (not 'DATA')
     const pin = getPin('SDA') ?? getPin('DATA');
     if (pin === null) return () => {};
 
-    // Ask the simulator if it handles sensor protocols natively (e.g. ESP32
-    // delegates to backend QEMU).  If so, we only forward property updates.
-    const el = element as any;
-    const temperature = el.temperature ?? 25.0;
-    const humidity = el.humidity ?? 50.0;
+    const el = element as { temperature?: number; humidity?: number };
+    const answer = requestLine(simulator, {
+      sensor_type: 'dht22',
+      pin,
+      temperature: el.temperature ?? 25.0,
+      humidity: el.humidity ?? 50.0,
+    }, { componentId });
 
-    const handledNatively =
-      typeof (simulator as any).registerSensor === 'function' &&
-      (simulator as any).registerSensor('dht22', pin, { temperature, humidity });
-
-    if (handledNatively) {
-      registerSensorUpdate(componentId, (values) => {
-        if ('temperature' in values) el.temperature = values.temperature as number;
-        if ('humidity' in values) el.humidity = values.humidity as number;
-        (simulator as any).updateSensor(pin, {
-          temperature: el.temperature ?? 25.0,
-          humidity: el.humidity ?? 50.0,
-        });
-      });
-
-      return () => {
-        (simulator as any).unregisterSensor(pin);
-        unregisterSensorUpdate(componentId);
-      };
-    }
-
-    let wasLow = false;
-    // Prevent DHT22's own scheduled pin changes from re-triggering the response.
-    // After the MCU releases DATA HIGH and we begin responding, we ignore all
-    // pin-change callbacks until the full waveform has been emitted.
-    // DHT22 response is ~5 ms; gate for ~12.5 ms scaled to the CPU clock.
-
-    const clockHz: number =
-      typeof (simulator as any).getClockHz === 'function'
-        ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (simulator as any).getClockHz()
-        : 16_000_000;
-    const RESPONSE_GATE_CYCLES = Math.round((12_500 * clockHz) / 1_000_000);
-    let responseEndCycle = 0;
-    let responseEndTimeMs = 0; // time-based fallback for ESP32 (no cycle counter)
-
-    const getCycles = (): number =>
-      typeof (simulator as any).getCurrentCycles === 'function'
-        ? ((simulator as any).getCurrentCycles() as number)
-        : -1;
-
-    const unsub = (simulator as any).pinManager.onPinChange(pin, (_: number, state: boolean) => {
-      // While DHT22 is driving the line, ignore our own scheduled changes.
-      const now = getCycles();
-      if (now >= 0 && now < responseEndCycle) return;
-      // Time-based fallback for ESP32 (no cycle counter available)
-      if (now < 0 && Date.now() < responseEndTimeMs) return;
-
-      if (!state) {
-        // MCU drove DATA LOW — start signal detected
-        wasLow = true;
-        return;
-      }
-      if (wasLow) {
-        // MCU released DATA HIGH — begin DHT22 response
-        wasLow = false;
-        const cur = getCycles();
-        responseEndCycle = cur >= 0 ? cur + RESPONSE_GATE_CYCLES : 0;
-        responseEndTimeMs = Date.now() + 20; // 20ms gate for non-cycle simulators
-        scheduleDHT22Response(simulator, pin, element);
-      }
-    });
-
-    // Idle state: DATA HIGH (pulled up)
-    simulator.setPinState(pin, true);
-
-    // SensorControlPanel: update temperature / humidity on the element
+    // SensorControlPanel: update temperature / humidity on the element, and
+    // tell the host when there is one.
     registerSensorUpdate(componentId, (values) => {
-      const el = element as any;
       if ('temperature' in values) el.temperature = values.temperature as number;
       if ('humidity' in values) el.humidity = values.humidity as number;
+      if (answer.mode !== 'none') {
+        answer.update({ temperature: el.temperature ?? 25.0, humidity: el.humidity ?? 50.0 });
+      }
     });
 
     return () => {
-      unsub();
-      simulator.setPinState(pin, true);
+      if (answer.mode !== 'none') answer.release();
       unregisterSensorUpdate(componentId);
     };
   },

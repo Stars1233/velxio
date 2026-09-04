@@ -7,6 +7,10 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PartSimulationRegistry } from '../simulation/parts/PartSimulationRegistry';
+import { LineSensorHub } from '../simulation/line/LineSensorHub';
+import type { LineHostPort } from '../simulation/line/LineHost';
+import { INITIAL_PAD, type PadEvent, type PadState } from '../simulation/line/padEvent';
+import { clearLineGaps, lineGaps } from '../simulation/line/requestLine';
 
 // Side-effect imports — register all parts
 import '../simulation/parts/BasicParts';
@@ -182,39 +186,73 @@ describe('ks2e-m-dc5 — onPinStateChange', () => {
 
 // ─── hc-sr04 ──────────────────────────────────────────────────────────────────
 
-describe('hc-sr04 — attachEvents', () => {
-  it('sets ECHO LOW on init and watches TRIG pin', () => {
-    const logic = PartSimulationRegistry.get('hc-sr04');
-    const el = makeElement();
-    const sim = makeSimulator();
-    logic!.attachEvents!(el, sim as any, pinMap({ TRIG: 2, ECHO: 3 }));
+describe('hc-sr04 — attachEvents (the line contract)', () => {
+  function makeLineSim() {
+    const listeners = new Map<number, Set<(e: PadEvent) => void>>();
+    const port: LineHostPort & { edges: Array<[number, boolean, number]>; rests: Array<[number, boolean, boolean]> } = {
+      edges: [],
+      rests: [],
+      now: () => 5_000,
+      clockHz: () => 16e6,
+      scheduleEdge: (pin, level, at) => port.edges.push([pin, level, at]),
+      onPad: (pin, cb) => {
+        if (!listeners.has(pin)) listeners.set(pin, new Set());
+        listeners.get(pin)!.add(cb);
+        return () => listeners.get(pin)!.delete(cb);
+      },
+      restPad: (pin, level, driven) => port.rests.push([pin, level, driven]),
+    };
+    const hub = new LineSensorHub(port);
+    const sim = {
+      ...makeSimulator(),
+      lineSupport: () => ({ mode: 'local' as const }),
+      lineHub: () => hub,
+      guest(pin: number, drive: PadState['drive'], prevDrive: PadState['drive'] = 'z') {
+        const prev: PadState = { ...INITIAL_PAD, drive: prevDrive };
+        const next: PadState = { drive, pull: 0, level: drive !== 'low', cycle: 5_000 };
+        listeners.get(pin)?.forEach((cb) => cb({ pin, ...next, prev }));
+      },
+    };
+    return { sim, hub, port };
+  }
 
-    expect(sim.setPinState).toHaveBeenCalledWith(3, false); // ECHO initially LOW
-    expect(sim.pinManager.onPinChange).toHaveBeenCalledWith(2, expect.any(Function));
+  it('asks the board to host it, rests ECHO low, and owns ECHO', () => {
+    const logic = PartSimulationRegistry.get('hc-sr04');
+    const { sim, hub, port } = makeLineSim();
+    logic!.attachEvents!(makeElement(), sim as any, pinMap({ TRIG: 2, ECHO: 3 }), 'sr04-1');
+    expect(port.rests).toEqual([[3, false, true]]);
+    expect(hub.ownsPin(3)).toBe(true);
+    expect(hub.ownsPin(2)).toBe(false);
   });
 
-  it('fires ECHO HIGH pulse when TRIG goes HIGH', () => {
+  it('answers a TRIG rise with the two-edge ECHO pulse', () => {
     const logic = PartSimulationRegistry.get('hc-sr04');
-    const el = makeElement();
-    const sim = makeSimulator();
-    logic!.attachEvents!(el, sim as any, pinMap({ TRIG: 2, ECHO: 3 }));
-
-    // Extract the onPinChange callback for TRIG
-    const trigCb = (sim.pinManager.onPinChange as ReturnType<typeof vi.fn>).mock.calls.find(
-      ([pin]: [number]) => pin === 2,
-    )![1] as (_: number, state: boolean) => void;
-
-    trigCb(2, true); // TRIG HIGH
-    expect(setTimeout).toHaveBeenCalledWith(expect.any(Function), 1);
+    const { sim, port } = makeLineSim();
+    logic!.attachEvents!(makeElement(), sim as any, pinMap({ TRIG: 2, ECHO: 3 }), 'sr04-2');
+    sim.guest(2, 'high', 'low');
+    expect(port.edges).toEqual([
+      [3, true, 5_000 + 16 * 600],
+      [3, false, 5_000 + 16 * 600 + Math.round((10 / 17150) * 16e6)],
+    ]);
   });
 
   it('returns no-op when TRIG or ECHO is not connected', () => {
     const logic = PartSimulationRegistry.get('hc-sr04');
-    const el = makeElement();
-    const sim = makeSimulator();
-    const cleanup = logic!.attachEvents!(el, sim as any, noPins);
-    expect(sim.pinManager.onPinChange).not.toHaveBeenCalled();
+    const { sim, hub } = makeLineSim();
+    const cleanup = logic!.attachEvents!(makeElement(), sim as any, noPins, 'sr04-3');
+    expect(hub.size).toBe(0);
     expect(() => cleanup()).not.toThrow();
+  });
+
+  it('refuses out loud on a board with no line support', () => {
+    clearLineGaps();
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logic = PartSimulationRegistry.get('hc-sr04');
+    const sim = makeSimulator();
+    logic!.attachEvents!(makeElement(), sim as any, pinMap({ TRIG: 2, ECHO: 3 }), 'sr04-4');
+    expect(sim.setPinState).not.toHaveBeenCalled();
+    expect(lineGaps().map((g) => g.sensorType)).toEqual(['hc-sr04']);
+    warn.mockRestore();
   });
 });
 

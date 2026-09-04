@@ -18,6 +18,7 @@
  */
 
 import { PartSimulationRegistry } from './PartSimulationRegistry';
+import { requestLine } from '../line/requestLine';
 import { setAdcVoltage, emitPropertyChange, analogRailVolts } from './partUtils';
 import { registerSensorUpdate, unregisterSensorUpdate } from '../SensorUpdateRegistry';
 
@@ -651,12 +652,11 @@ PartSimulationRegistry.register('ks2e-m-dc5', {
 // ─── HC-SR04 Ultrasonic Distance Sensor ──────────────────────────────────────
 
 /**
- * Ultrasonic sensor — monitors the TRIG pin.
- * When TRIG goes HIGH, responds with an ECHO HIGH pulse whose duration
- * encodes the configured distance (default 10 cm).
- *
- * Echo timing: echoMs = distanceCm / 17.15
- * (speed of sound ~343 m/s; round-trip halves: 17150 cm/s)
+ * HC-SR04 — a line-owning sensor: a trigger on one wire, a timed ECHO pulse
+ * back on another. The pulse (600 us overhead, then distance_cm / 17150 s) is
+ * the MODEL in simulation/line/models/hc-sr04.ts, hosted by the board under
+ * the line contract. This part binds the canvas element to it and forwards
+ * the distance slider.
  */
 PartSimulationRegistry.register('hc-sr04', {
   attachEvents: (element, simulator, getArduinoPinHelper, componentId) => {
@@ -664,77 +664,22 @@ PartSimulationRegistry.register('hc-sr04', {
     const echoPin = getArduinoPinHelper('ECHO');
     if (trigPin === null || echoPin === null) return () => {};
 
-    const el = element as any;
-    let distanceCm = parseFloat(el.distance) || 10; // default distance in cm
-
-    // ── ESP32 path: delegate protocol to backend QEMU worker ──
-
-    const handledNatively =
-      typeof (simulator as any).registerSensor === 'function' &&
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (simulator as any).registerSensor('hc-sr04', trigPin, {
-        distance: distanceCm,
-        echo_pin: echoPin,
-      });
-
-    if (handledNatively) {
-      registerSensorUpdate(componentId, (values) => {
-        if ('distance' in values) {
-          distanceCm = Math.max(2, Math.min(400, values.distance as number));
-        }
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (simulator as any).updateSensor(trigPin, {
-          distance: distanceCm,
-          echo_pin: echoPin,
-        });
-      });
-
-      return () => {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (simulator as any).unregisterSensor(trigPin);
-        unregisterSensorUpdate(componentId);
-      };
-    }
-
-    // ── AVR / RP2040 path: local pin scheduling ──
-    simulator.setPinState(echoPin, false); // ECHO LOW initially
-
-    const cleanup = simulator.pinManager.onPinChange(trigPin, (_: number, state: boolean) => {
-      if (!state) return; // only react on TRIG HIGH
-      if (typeof simulator.schedulePinChange === 'function') {
-        const clockHz: number =
-          typeof (simulator as any).getClockHz === 'function'
-            ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              (simulator as any).getClockHz()
-            : 16_000_000;
-        const now = simulator.getCurrentCycles() as number;
-        const processingCycles = Math.round(600e-6 * clockHz); // 600 µs sensor overhead
-        const echoCycles = Math.round((distanceCm / 17150) * clockHz);
-        simulator.schedulePinChange(echoPin, true, now + processingCycles);
-        simulator.schedulePinChange(echoPin, false, now + processingCycles + echoCycles);
-        console.log(
-          `[HC-SR04] Scheduled ECHO (${distanceCm} cm, echo=${(echoCycles / (clockHz / 1e6)).toFixed(1)} µs)`,
-        );
-      } else {
-        // Fallback: best-effort async (works with delay()-based sketches, not pulseIn)
-        const echoMs = Math.max(1, distanceCm / 17.15);
-        setTimeout(() => {
-          simulator.setPinState(echoPin, true);
-          setTimeout(() => {
-            simulator.setPinState(echoPin, false);
-          }, echoMs);
-        }, 1);
-      }
-    });
+    const el = element as { distance?: string | number };
+    const answer = requestLine(simulator, {
+      sensor_type: 'hc-sr04',
+      pin: trigPin,
+      echo_pin: echoPin,
+      distance: parseFloat(String(el.distance)) || 10,
+    }, { componentId });
 
     registerSensorUpdate(componentId, (values) => {
-      if ('distance' in values) {
-        distanceCm = Math.max(2, Math.min(400, values.distance as number));
+      if ('distance' in values && answer.mode !== 'none') {
+        answer.update({ distance: values.distance as number });
       }
     });
 
     return () => {
-      cleanup();
+      if (answer.mode !== 'none') answer.release();
       unregisterSensorUpdate(componentId);
     };
   },

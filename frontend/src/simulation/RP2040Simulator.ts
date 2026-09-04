@@ -7,6 +7,8 @@ import { bootromB1 } from './rp2040-bootrom';
 import { loadUF2, loadUserFiles, getFirmware } from './MicroPythonLoader';
 import { type PioPeripheral, createPioPeripheral } from './PioPeripheral';
 import { requestElectricalResolve } from './spice/electricalResolveHook';
+import type { LineCapable, LineHostPort, LineSupport } from './line/LineHost';
+import { LineSensorHub } from './line/LineSensorHub';
 
 /**
  * RP2040Simulator — Emulates Raspberry Pi Pico (RP2040) using rp2040js
@@ -230,7 +232,7 @@ export class IdleSpinDetector {
  */
 export type RP2040I2CDevice = I2CDevice;
 
-export class RP2040Simulator {
+export class RP2040Simulator implements LineCapable {
   // Drive digital INPUT pins from the solved circuit (connectDigitalInputsToMcu)
   // instead of the legacy part-seed, so digitalRead() reflects the REAL wiring:
   // a pin tied to a rail reads that rail, a button-to-GND on an INPUT_PULLUP pin
@@ -248,6 +250,8 @@ export class RP2040Simulator {
   private flashCopy: Uint8Array | null = null;
   private totalCycles = 0;
   private scheduledPinChanges: Array<{ cycle: number; pin: number; state: boolean }> = [];
+  /** Line-owning sensor models hosted on this CPU (simulation/line). Built lazily: it closes over the port. */
+  private lines: LineSensorHub | null = null;
   private pioStepAccum = 0;
   private usbCDC: USBCDC | null = null;
   private micropythonMode = false;
@@ -938,9 +942,17 @@ export class RP2040Simulator {
           if (pull === 1) gpio.setInputValue(true);
           else if (pull === 2) gpio.setInputValue(false);
           requestElectricalResolve();
+          // The pad was RELEASED. This is the event the level channel above
+          // cannot carry (no level moved, so `triggerPinChange` must stay
+          // silent, or every LED on a pin that goes input would flip), and it
+          // is exactly what a single-wire sensor waits for: a DHT22's start
+          // signal ends with pinMode(INPUT_PULLUP). It reaches the line
+          // contract through the pad channel, which reports drive, not level.
+          this.pinManager.reportPad(pin, 'z', pull, this.totalCycles);
           return;
         }
         const isHigh = state === GPIOPinState.High;
+        this.pinManager.reportPad(pin, isHigh ? 'high' : 'low', 0, this.totalCycles);
         this.pinManager.triggerPinChange(pin, isHigh, 'mcu');
         if (this.onPinChangeWithTime && this.rp2040) {
           // IClock interface exposes `nanos` (not `timeUs`)
@@ -1031,7 +1043,17 @@ export class RP2040Simulator {
         // the clock over it instead of grinding every cycle. Capped at the
         // next alarm/scheduled pin change inside advanceClock, and to a small
         // slice so the firmware re-checks its deadline (bounds overshoot).
-        const budget = Math.min(cyclesTarget - cyclesDone, IDLE_SLICE_CYCLES);
+        //
+        // This is a skip taken while the guest EXECUTES, so it is bound by the
+        // line contract's floor as well as its fence: while a self-timed reply
+        // is on a wire the guest may be measuring pulses by counting its own
+        // iterations, and a skip between two edges makes every pulse count the
+        // same (LineTimeline). The WFI branch above is exempt: a sleeping core
+        // retires nothing. `skipBudget` is 0 while the floor holds; the frame
+        // then executes the instruction it would have skipped.
+        const budget = this.lines
+          ? this.lines.skipBudget(Math.min(cyclesTarget - cyclesDone, IDLE_SLICE_CYCLES), this.totalCycles)
+          : Math.min(cyclesTarget - cyclesDone, IDLE_SLICE_CYCLES);
         const jumped = this.advanceClock(budget, pioDiv, clock);
         if (jumped <= 0) {
           cyclesDone += this.execOne(core, clock, pioDiv);
@@ -1122,6 +1144,7 @@ export class RP2040Simulator {
     this.stop();
     this.totalCycles = 0;
     this.scheduledPinChanges = [];
+    this.lines?.reset();
     this.idleDetector.reset();
     if (this.rp2040 && this.flashCopy) {
       if (this.micropythonMode) {
@@ -1400,8 +1423,42 @@ export class RP2040Simulator {
   }
 
   // ── Generic sensor registration (board-agnostic API) ──────────────────────
+  // ── Line-owning sensors (simulation/line) ─────────────────────────────────
+  // The models run here on this CPU's own cycle counter. Two mechanisms here
+  // advance time without executing — the WFI alarm skip and the idle-spin
+  // elision — and both go through advanceClock, which clamps on the next
+  // scheduled edge (the fence); the elision also asks the hub for its budget
+  // (the floor). See LineTimeline for the rule.
+
+  lineSupport(): LineSupport {
+    return { mode: 'local' };
+  }
+
+  lineHub(): LineSensorHub {
+    if (!this.lines) {
+      const port: LineHostPort = {
+        now: () => this.getCurrentCycles(),
+        clockHz: () => this.getClockHz(),
+        scheduleEdge: (pin, level, atCycle) => this.schedulePinChange(pin, level, atCycle),
+        onPad: (pin, cb) => this.pinManager.onPadChange(pin, cb),
+        // rp2040js does not model a host-owned pad: setInputValue is the
+        // input register, and a released line on its pull reads the pull's
+        // level. Seeding it is the rest, for a driven and a released pad alike.
+        restPad: (pin, level) => this.setPinState(pin, level),
+      };
+      this.lines = new LineSensorHub(port);
+    }
+    return this.lines;
+  }
+
   // RP2040 handles all sensor protocols locally via schedulePinChange,
   // so these return false / no-op — the sensor runs its own frontend logic.
+
+  /** Pads a hosted line model drives itself — the SPICE-threshold connector
+   *  asks before pushing a solved level into the guest (connectDigitalInputsToMcu). */
+  ownsPin(pin: number): boolean {
+    return this.lines?.ownsPin(pin) ?? false;
+  }
 
   registerSensor(_type: string, _pin: number, _props: Record<string, unknown>): boolean {
     return false;

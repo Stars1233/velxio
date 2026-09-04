@@ -38,6 +38,7 @@ import type { BoardKind } from '../types/board';
 import { MicroPythonSession, type MpyProgram } from './micropythonSession';
 import { getProBoard } from '../lib/proBoardRegistry';
 import { sensorRecordOwnsPin as recordOwnsPin } from './sensorModels';
+import type { LineSupport } from './line/LineHost';
 import { generateUUID } from '../utils/uuid';
 
 /**
@@ -698,6 +699,21 @@ export class Esp32Bridge {
    * and reply — pulseIn() then timed out forever while the worker was pulsing
    * the pin correctly. Same shape as the in-browser engines' ownsPin guard.
    */
+  /**
+   * The line-owning sensors the backend QEMU worker models itself, timed on
+   * the guest's clock inside QEMU (esp32_worker.py `_dht22_*` / hc-sr04 sync
+   * handlers). Mirror of that file, the way esp32-signals.ts mirrors
+   * esp32_signals.py: a new worker-side model is one entry here. An overlay
+   * bridge that runs the models in the browser overrides this with the
+   * registry's own list.
+   */
+  static readonly WORKER_LINE_MODELS: readonly string[] = ['dht22', 'hc-sr04'];
+
+  /** What this board can host under the line contract (simulation/line). */
+  lineSupport(): LineSupport {
+    return { mode: 'hosted', models: Esp32Bridge.WORKER_LINE_MODELS };
+  }
+
   ownsSensorPin(gpioPin: number): boolean {
     // ONLY the single-wire sensors own a pad. The same channel registers plenty
     // of other things — an ePaper panel's DC/BUSY pins, a membrane keypad's
