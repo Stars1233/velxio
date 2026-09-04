@@ -47,6 +47,7 @@ function makeRig(pin = 5): LineRig {
   const mask = 1 << pin;
   return {
     sim,
+    pads: { onPad: (p, cb) => sim.pinManager.onPadChange(p, cb), get: (p) => sim.pinManager.getPad(p) },
     pin,
     otherPin: pin + 1,
     guest: {

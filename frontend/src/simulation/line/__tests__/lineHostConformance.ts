@@ -18,15 +18,21 @@
  * to run the guest forward. The rest is the same for every board.
  */
 import { describe, expect, it } from 'vitest';
-import type { PinManager } from '../../PinManager';
 import type { LineCapable } from '../LineHost';
-import type { PadEvent } from '../padEvent';
+import type { PadEvent, PadState } from '../padEvent';
 import { assertedLow, releasedLow } from '../padEvent';
 import { requestLine } from '../requestLine';
 import '../index';
 
+/** Where the board's pad events can be observed: a PinManager, or an engine bridge's own bus. */
+export interface PadSource {
+  onPad(pin: number, cb: (e: PadEvent) => void): () => void;
+  get(pin: number): Readonly<PadState>;
+}
+
 export interface LineRig {
-  sim: LineCapable & { pinManager: PinManager; ownsPin(pin: number): boolean; reset(): void };
+  sim: LineCapable & { ownsPin(pin: number): boolean; reset(): void };
+  pads: PadSource;
   /** The board GPIO under test. */
   pin: number;
   /** A second, unrelated GPIO. */
@@ -48,7 +54,7 @@ export function describeLineHostConformance(name: string, makeRig: () => LineRig
   describe(`line-host conformance: ${name}`, () => {
     const collect = (rig: LineRig): PadEvent[] => {
       const events: PadEvent[] = [];
-      rig.sim.pinManager.onPadChange(rig.pin, (e) => events.push(e));
+      rig.pads.onPad(rig.pin, (e) => events.push(e));
       return events;
     };
 
@@ -67,7 +73,7 @@ export function describeLineHostConformance(name: string, makeRig: () => LineRig
       // pinMode(INPUT_PULLUP) is two register writes on most cores (direction,
       // then pull), so the pull may arrive one event later; what must hold is
       // that the pad ends up released and pulled up.
-      const pad = rig.sim.pinManager.getPad(rig.pin);
+      const pad = rig.pads.get(rig.pin);
       expect(pad.drive).toBe('z');
       expect(pad.pull).toBe(1);
       expect(pad.level).toBe(true);

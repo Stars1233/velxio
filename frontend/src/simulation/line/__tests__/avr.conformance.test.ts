@@ -28,6 +28,7 @@ function makeRig(): LineRig {
   const readReg = (a: number) => cpu.data[a] ?? 0;
   return {
     sim,
+    pads: { onPad: (p, cb) => sim.pinManager.onPadChange(p, cb), get: (p) => sim.pinManager.getPad(p) },
     pin: 8,
     otherPin: 9,
     guest: {
