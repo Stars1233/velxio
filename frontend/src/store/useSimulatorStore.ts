@@ -69,6 +69,7 @@ import {
 } from '../simulation/Interconnect';
 import { SENSOR_CONTROLS, getSensorControl, getSensorControlForComponent } from '../simulation/sensorControlConfig';
 import { SINGLE_WIRE_SENSOR_MODELS } from '../simulation/sensorModels';
+import type { LineSupport } from '../simulation/line/LineHost';
 import { traceBoardGpio } from '../simulation/PinTrace';
 import { dispatchSensorUpdate } from '../simulation/SensorUpdateRegistry';
 
@@ -328,6 +329,12 @@ class Esp32BridgeShim {
 
   // ── Generic sensor registration (board-agnostic API) ──────────────────────
   // ESP32 delegates sensor protocols to the backend QEMU.
+
+  /** The line contract's declaration: whatever the bridge behind this shim
+   *  can host (the QEMU worker's models, or an in-browser engine's). */
+  lineSupport(): LineSupport {
+    return this.bridge.lineSupport();
+  }
 
   registerSensor(type: string, pin: number, properties: Record<string, unknown>): boolean {
     this.bridge.sendSensorAttach(type, pin, properties);
@@ -834,6 +841,17 @@ class Stm32BridgeShim {
   feedUart(uart: number, data: string): boolean {
     this.bridge.sendSerialBytes(Array.from(new TextEncoder().encode(data)), uart);
     return true;
+  }
+
+  /** The STM32 worker reuses the ESP32 worker's device models but leaves out
+   *  the DHT22 / HC-SR04 sync handlers (stm32_worker.py header), so a
+   *  line-owning sensor on an STM32 has nothing to answer it. Said here, so
+   *  the part hears it instead of waiting on a silent pad. */
+  lineSupport(): LineSupport {
+    return {
+      mode: 'none',
+      why: "the STM32 emulator's worker does not model single-wire sensors (no DHT22 / HC-SR04 handlers)",
+    };
   }
 
   // ── Generic sensor registration (delegated to the backend QEMU worker) ──

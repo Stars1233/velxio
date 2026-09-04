@@ -21,6 +21,7 @@
  * The verifier never throws; if ngspice fails to converge it returns a
  * single solver-error warning and the rest of the rules are skipped.
  */
+import { lineGaps } from '../line/requestLine';
 import { buildNetlist } from '../spice/NetlistBuilder';
 import { runNetlist as runSpice } from '../spice/runNetlist';
 import { UnionFind } from '../spice/unionFind';
@@ -43,6 +44,7 @@ export type WarningCode =
   | 'shorted-component'
   | 'resistor-overpower'
   | 'led-no-current'
+  | 'unsupported-sensor'
   | 'unpowered-net'
   | 'no-return-path'
   | 'voltage-mismatch';
@@ -109,6 +111,25 @@ export async function verifyCircuit(
   // Run a forced .op solve so currents are scalar and deterministic.
   const opInput: BuildNetlistInput = { ...input, analysis: { kind: 'op' } };
   const { netlist, pinNetMap } = buildNetlist(opInput);
+
+  // ── Line-owning sensors the wired board cannot host (no solve) ────────
+  // A DHT22 or an HC-SR04 asks the board it is wired to for the line
+  // contract when it mounts (simulation/line/requestLine). A board that
+  // cannot honour it refuses with a reason, and that reason is the only thing
+  // standing between the user and a sensor that silently never answers: the
+  // Pi family reads its pins over a serial link, the STM32 worker has no
+  // single-wire handlers, a QEMU engine that does not exist for this chip.
+  // Surfaced here, at Run, next to the electrical checks. Non-blocking: the
+  // rest of the circuit may be fine.
+  for (const gap of lineGaps()) {
+    if (gap.componentId && !input.components.some((c) => c.id === gap.componentId)) continue;
+    warnings.push({
+      severity: 'warning',
+      code: 'unsupported-sensor',
+      componentId: gap.componentId,
+      message: `${gap.sensorType} on GPIO ${gap.pin} will not answer here: ${gap.why}`,
+    });
+  }
 
   // ── Board over-voltage (graph-based, no solve) ─────────────────────────
   // Runs BEFORE the solve so it still reports even when an external source on

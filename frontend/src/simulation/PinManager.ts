@@ -17,6 +17,14 @@
  */
 
 import { requestElectricalResolve } from './spice/electricalResolveHook';
+import {
+  INITIAL_PAD,
+  restingLevel,
+  type PadDrive,
+  type PadEvent,
+  type PadPull,
+  type PadState,
+} from './line/padEvent';
 
 export type PinState = boolean;
 export type PinChangeCallback = (pin: number, state: PinState) => void;
@@ -43,6 +51,50 @@ export class PinManager {
   // inputs read the right idle level (the ESP32's internal pulls live inside
   // QEMU and are otherwise invisible to the netlist).
   private pinPulls: Map<number, 0 | 1 | 2> = new Map();
+
+  // ── Pad drive state (the line contract, simulation/line) ─────────────────
+  //
+  // What the MCU is DOING to each pad — driving low, driving high, or
+  // released — as opposed to `pinStates`, which is the level the wire holds
+  // and which the host also writes. A line-owning sensor waits for the guest
+  // to RELEASE its wire, a direction change that moves no level, and only
+  // this channel carries it. Fed by the simulators through `reportPad`;
+  // consumed through `onPadChange`. Never fired by host-side writes.
+  private padStates: Map<number, PadState> = new Map();
+  private padListeners: Map<number, Set<(e: PadEvent) => void>> = new Map();
+
+  /** Subscribe to guest drive-state changes on one pad. */
+  onPadChange(pin: number, callback: (e: PadEvent) => void): () => void {
+    if (!this.padListeners.has(pin)) this.padListeners.set(pin, new Set());
+    this.padListeners.get(pin)!.add(callback);
+    return () => {
+      this.padListeners.get(pin)?.delete(callback);
+    };
+  }
+
+  /** The pad's current drive state (released with no pull until reported). */
+  getPad(pin: number): Readonly<PadState> {
+    return this.padStates.get(pin) ?? INITIAL_PAD;
+  }
+
+  /**
+   * SIMULATOR -> listeners. Report what the guest did to a pad. Fires only on
+   * a real change of drive or pull; the resting level is derived here so no
+   * simulator computes it. Does NOT touch `pinStates` or fire `onPinChange` —
+   * the level channel keeps its own semantics, and the two must not double
+   * fire for a plain digitalWrite.
+   */
+  reportPad(pin: number, drive: PadDrive, pull: PadPull, cycle: number): void {
+    const prev = this.padStates.get(pin) ?? INITIAL_PAD;
+    if (prev.drive === drive && prev.pull === pull) return;
+    const level = restingLevel(drive, pull, prev.level);
+    const next: PadState = { drive, pull, level, cycle };
+    this.padStates.set(pin, next);
+    const callbacks = this.padListeners.get(pin);
+    if (!callbacks || callbacks.size === 0) return;
+    const event: PadEvent = { pin, ...next, prev };
+    callbacks.forEach((cb) => cb(event));
+  }
 
   // ── Digital pin API ──────────────────────────────────────────────────────
 
@@ -84,6 +136,7 @@ export class PinManager {
     oldValue: number = 0,
     pinMap?: number[],
     ddrMask?: number,
+    cycle: number = -1,
   ) {
     const legacyOffsets: Record<string, number> = { PORTB: 8, PORTC: 14, PORTD: 0 };
 
@@ -93,13 +146,26 @@ export class PinManager {
     // correct idle level (HIGH) under spice-driven inputs — without this, the
     // canonical button-to-GND would float LOW. AVR has no internal pull-down.
     // Runs over all 8 bits (not just changed ones) so DDR/PORT edits both apply.
+    //
+    // The same pass reports each pad's DRIVE state: DDR set means the MCU is
+    // driving the PORT bit's level, DDR clear means the pad is released and the
+    // PORT bit is its pull-up. `reportPad` fires only on a real change, so the
+    // release of a line (DDR 1 -> 0, PORT unchanged) reaches the line contract
+    // even though no level moved — the event a value-only listener never saw.
     if (ddrMask !== undefined) {
       for (let bit = 0; bit < 8; bit++) {
         const mask = 1 << bit;
         const arduinoPin = pinMap ? pinMap[bit] : (legacyOffsets[portName] ?? 0) + bit;
         if (arduinoPin < 0) continue;
         const isInput = (ddrMask & mask) === 0;
-        this.setPinPull(arduinoPin, isInput && (newValue & mask) !== 0 ? 1 : 0);
+        const portBit = (newValue & mask) !== 0;
+        this.setPinPull(arduinoPin, isInput && portBit ? 1 : 0);
+        this.reportPad(
+          arduinoPin,
+          isInput ? 'z' : portBit ? 'high' : 'low',
+          isInput && portBit ? 1 : 0,
+          cycle,
+        );
       }
     }
 
@@ -233,6 +299,9 @@ export class PinManager {
     this.pinStates.clear();
     this.outputPins.clear();
     this.pinPulls.clear();
+    // A cold boot releases every pad; the firmware re-configures each one from
+    // setup(), and the next `reportPad` must see that as a change.
+    this.padStates.clear();
     for (const pin of wereHigh) {
       const callbacks = this.listeners.get(pin);
       if (callbacks) {

@@ -523,6 +523,16 @@ export const DynamicComponent: React.FC<DynamicComponentProps> = ({
             isRunning: () =>
               !!useSimulatorStore.getState().boards.find((b) => b.id === piBoardId)?.running,
             pinManager: getBoardPinManager(piBoardId),
+            // The line contract's declaration. A QEMU-Linux guest reads its
+            // pins over a serial link to the backend (measured: ~120 reads/s,
+            // 8 ms per read) and the bridge carries levels, not timed edges,
+            // so a single-wire sensor's reply has nowhere to land in guest
+            // time. Said here, so the part hears it instead of waiting on a
+            // silent pad.
+            lineSupport: () => ({
+              mode: 'none' as const,
+              why: 'this board runs a Linux guest that reads its pins over a serial link; timed single-wire sensors are not modelled',
+            }),
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } as any)
         : null;

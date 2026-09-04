@@ -5,7 +5,7 @@
  * Verifies:
  *   1. Esp32BridgeShim delegates registerSensor → bridge.sendSensorAttach
  *   2. DHT22 attachEvents detects ESP32 shim and calls registerSensor
- *   3. DHT22 attachEvents falls back to local protocol on AVR (registerSensor → false)
+ *   3. DHT22 attachEvents attaches to a board's own line hub when it hosts the model itself
  *   4. Sensor update flow: updateSensor → bridge.sendSensorUpdate
  *   5. Cleanup: unregisterSensor → bridge.sendSensorDetach
  *   6. Esp32Bridge includes pre-registered sensors in start_esp32 payload
@@ -121,6 +121,8 @@ vi.stubGlobal('sessionStorage', {
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import { Esp32Bridge } from '../simulation/Esp32Bridge';
+import { LineSensorHub } from '../simulation/line/LineSensorHub';
+import type { LineHostPort } from '../simulation/line/LineHost';
 import { PartSimulationRegistry } from '../simulation/parts/PartSimulationRegistry';
 import '../simulation/parts/ProtocolParts';
 
@@ -135,7 +137,7 @@ function makeElement(props: Record<string, unknown> = {}): HTMLElement {
   } as unknown as HTMLElement;
 }
 
-/** Simulator mock that mimics Esp32BridgeShim (registerSensor returns true) */
+/** Simulator mock that mimics Esp32BridgeShim: declares the worker's models as hosted, registerSensor returns true */
 function makeEsp32Shim() {
   const bridge = {
     sendSensorAttach: vi.fn(),
@@ -144,6 +146,7 @@ function makeEsp32Shim() {
   };
   return {
     bridge,
+    lineSupport: () => ({ mode: 'hosted' as const, models: ['dht22', 'hc-sr04'] }),
     pinManager: {
       onPinChange: vi.fn().mockReturnValue(() => {}),
       onPwmChange: vi.fn().mockReturnValue(() => {}),
@@ -252,33 +255,39 @@ describe('dht22 — ESP32 shim detection', () => {
 // 3. DHT22 attachEvents — AVR fallback (local protocol)
 // ─────────────────────────────────────────────────────────────────────────────
 
-describe('dht22 — AVR local protocol fallback', () => {
+describe('dht22 — a board that hosts the model itself (AVR / RP2040 shape)', () => {
   const logic = () => PartSimulationRegistry.get('dht22')!;
 
-  it('falls back to local protocol when registerSensor returns false', () => {
-    const sim = makeAVRSim();
+  function makeLocalSim() {
+    const port: LineHostPort = {
+      now: () => 0,
+      clockHz: () => 16e6,
+      scheduleEdge: vi.fn(),
+      onPad: vi.fn().mockReturnValue(() => {}),
+      restPad: vi.fn(),
+    };
+    const hub = new LineSensorHub(port);
+    return { ...makeAVRSim(), port, hub, lineSupport: () => ({ mode: 'local' as const }), lineHub: () => hub };
+  }
+
+  it('attaches the model to the board hub instead of a legacy channel', () => {
+    const sim = makeLocalSim();
     const el = makeElement({ temperature: 25, humidity: 50 });
     logic().attachEvents!(el, sim as any, pinMap({ SDA: 7 }), 'dht22-avr');
-
-    // AVR registerSensor returns false → local protocol path
-    expect(sim.registerSensor).toHaveBeenCalledWith('dht22', 7, { temperature: 25, humidity: 50 });
-
-    // Local protocol: onPinChange registered for start-signal detection
-    expect(sim.pinManager.onPinChange).toHaveBeenCalledWith(7, expect.any(Function));
-    // Local protocol: DATA pin set HIGH (idle)
-    expect(sim.setPinState).toHaveBeenCalledWith(7, true);
+    expect(sim.hub.size).toBe(1);
+    expect(sim.port.onPad).toHaveBeenCalledWith(7, expect.any(Function));
+    expect(sim.port.restPad).toHaveBeenCalledWith(7, true, false);
+    expect(sim.registerSensor).not.toHaveBeenCalled();
   });
 
-  it('local protocol does NOT call registerSensor on bridge methods', () => {
-    const sim = makeAVRSim();
+  it('never touches the legacy sensor channel on a local host', () => {
+    const sim = makeLocalSim();
     const el = makeElement({ temperature: 25, humidity: 50 });
-    logic().attachEvents!(el, sim as any, pinMap({ SDA: 7 }), 'dht22-avr2');
-
-    // AVR path: uses onPinChange, not bridge sensor methods
-    expect(sim.pinManager.onPinChange).toHaveBeenCalledWith(7, expect.any(Function));
-    // updateSensor/unregisterSensor should NOT have been called
+    const cleanup = logic().attachEvents!(el, sim as any, pinMap({ SDA: 7 }), 'dht22-avr2');
     expect(sim.updateSensor).not.toHaveBeenCalled();
     expect(sim.unregisterSensor).not.toHaveBeenCalled();
+    cleanup();
+    expect(sim.hub.size).toBe(0);
   });
 });
 
