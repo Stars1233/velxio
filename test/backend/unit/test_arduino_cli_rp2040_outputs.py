@@ -8,8 +8,9 @@ handed it to picotool under a .uf2 name:
 
     ERROR: UF2 file does not contain a valid RP2 executable image
 
-These tests run pure-Python: subprocess.run is replaced by a fake that
-drops the files a real arduino-cli build would leave in --output-dir.
+These tests run pure-Python: the process launcher the service calls is
+monkeypatched with a fake that drops the files a real arduino-cli build
+would leave in --output-dir.
 """
 from __future__ import annotations
 
