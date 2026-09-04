@@ -584,8 +584,17 @@ class ArduinoCLIService:
                     print(f"Files in build dir: {list(build_dir.iterdir())}")
 
                     if self._is_rp2040_board(board_fqbn):
-                        # RP2040 outputs a .bin file (and optionally .uf2)
-                        # Try .bin first (raw binary, simplest to load into emulator)
+                        # RP2040 / RP2350 builds leave two files: the raw
+                        # .bin (the image from 0x10000000, what the browser
+                        # emulator loads) and the .uf2 picotool made from
+                        # the ELF (what the BOOTSEL drive and `picotool
+                        # load` want). Both go back: binary_content stays
+                        # the .bin so nothing that loads it changes, and
+                        # uf2_content carries the .uf2 for hardware flash.
+                        # Sending the .bin under a .uf2 name is what broke
+                        # the desktop flash for every Pico: picotool parses
+                        # by extension and rejects "UF2 file does not
+                        # contain a valid RP2 executable image".
                         bin_file = build_dir / "sketch.ino.bin"
                         uf2_file = build_dir / "sketch.ino.uf2"
 
@@ -594,13 +603,19 @@ class ArduinoCLIService:
                         if target_file:
                             raw_bytes = target_file.read_bytes()
                             binary_b64 = base64.b64encode(raw_bytes).decode('ascii')
-                            print(f"[RP2040] Binary file: {target_file.name}, size: {len(raw_bytes)} bytes")
+                            uf2_b64 = (
+                                base64.b64encode(uf2_file.read_bytes()).decode('ascii')
+                                if uf2_file.exists() else None
+                            )
+                            print(f"[RP2040] Binary file: {target_file.name}, size: {len(raw_bytes)} bytes"
+                                  f"{' (+ uf2)' if uf2_b64 else ''}")
                             print("=== RP2040 Compilation successful ===\n")
                             return {
                                 "success": True,
                                 "hex_content": None,
                                 "binary_content": binary_b64,
                                 "binary_type": "bin" if target_file == bin_file else "uf2",
+                                "uf2_content": uf2_b64,
                                 "stdout": result.stdout,
                                 "stderr": result.stderr
                             }

@@ -180,7 +180,8 @@
         "mpy": "Install MicroPython (if needed) and upload this project to a real USB-attached board",
         "mpyUnavailable": "MicroPython projects cannot be flashed from here — Arduino sketches only",
         "ready": "Flash the compiled sketch to a real USB-attached board",
-        "willCompile": "Compile the sketch and flash it to a real USB-attached board"
+        "willCompile": "Compile the sketch and flash it to a real USB-attached board",
+        "uf2Download": "Compile the sketch and download the .uf2 for the board's USB drive"
       },
       "wifiPanel": "WiFi panel",
       "addNodeHere": "Add node here",
@@ -492,6 +493,21 @@
         "compiling": "Compiling the sketch before flashing...",
         "recompiling": "Code changed since the last build — recompiling before flashing...",
         "compiled": "Build OK in {{seconds}}s. Starting flash..."
+      },
+      "downloadUf2": "Download .uf2",
+      "downloadUf2Hint": "Prefer to copy the file yourself? Save the .uf2 and drop it on the board's USB drive (RPI-RP2 or RP2350).",
+      "downloadOnlyIntro": "This browser cannot flash over USB (Web Serial and WebUSB exist in Chrome and Edge only). You can still download the compiled .uf2 and copy it to the board.",
+      "downloadOnlyHint": "Hold BOOTSEL while plugging the board in: it shows up as a USB drive. Drop the file there and the board reboots into your sketch.",
+      "compileDownload": "Compile & download .uf2",
+      "downloaded": "Saved {{file}}. Copy it to the board's USB drive.",
+      "noUf2": "The build produced no .uf2 for this board. Recompile against the current server and try again.",
+      "bootloader": {
+        "title": "Board not in bootloader mode?",
+        "manual": "Hold the BOOTSEL button while plugging the board in, then release it. It shows up as a USB drive named RPI-RP2 or RP2350.",
+        "automatic": "Reboot into bootloader over USB",
+        "rebooting": "Rebooting the board into bootloader mode...",
+        "rebooted": "Done. The board is in bootloader mode: click the flash button.",
+        "failed": "Could not reboot the board: {{error}}"
       }
     }
   },

@@ -178,7 +178,8 @@
         "mpy": "安装 MicroPython（如需要）并把此项目上传到 USB 连接的实体板",
         "mpyUnavailable": "MicroPython 项目不能从这里烧录：仅支持 Arduino 程序",
         "ready": "把编译好的程序烧录到 USB 连接的实体板",
-        "willCompile": "编译程序并烧录到 USB 连接的实体板"
+        "willCompile": "编译程序并烧录到 USB 连接的实体板",
+        "uf2Download": "编译程序并下载用于开发板 USB 驱动器的 .uf2"
       },
       "wifiPanel": "WiFi 面板"
     },
@@ -459,6 +460,21 @@
         "compiling": "烧录前先编译程序...",
         "recompiling": "上次构建后代码有改动：烧录前重新编译...",
         "compiled": "构建成功，用时 {{seconds}} 秒。开始烧录..."
+      },
+      "downloadUf2": "下载 .uf2",
+      "downloadUf2Hint": "想自己复制文件？保存 .uf2 并把它拖到开发板的 USB 驱动器 (RPI-RP2 或 RP2350) 上。",
+      "downloadOnlyIntro": "此浏览器无法通过 USB 烧录 (Web Serial 和 WebUSB 仅在 Chrome 和 Edge 中可用)。你仍然可以下载编译好的 .uf2 并复制到开发板。",
+      "downloadOnlyHint": "插入开发板时按住 BOOTSEL，它会显示为一个 USB 驱动器。把文件放进去，开发板就会重启并运行你的程序。",
+      "compileDownload": "编译并下载 .uf2",
+      "downloaded": "已保存 {{file}}。请把它复制到开发板的 USB 驱动器。",
+      "noUf2": "本次构建没有为该开发板生成 .uf2。请在当前服务器上重新编译后再试。",
+      "bootloader": {
+        "title": "开发板不在引导加载程序模式？",
+        "manual": "插入开发板时按住 BOOTSEL 按钮，然后松开。它会显示为名为 RPI-RP2 或 RP2350 的 USB 驱动器。",
+        "automatic": "通过 USB 重启到引导加载程序",
+        "rebooting": "正在把开发板重启到引导加载程序模式...",
+        "rebooted": "完成。开发板已进入引导加载程序模式，请点击烧录按钮。",
+        "failed": "无法重启开发板: {{error}}"
       }
     }
   },

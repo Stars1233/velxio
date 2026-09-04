@@ -574,6 +574,10 @@ class CompileResponse(BaseModel):
     hex_content: str | None = None
     binary_content: str | None = None  # base64-encoded .bin for RP2040
     binary_type: str | None = None     # 'bin' or 'uf2'
+    # RP2040 / RP2350 only: base64 of the .uf2 picotool built next to the
+    # .bin. The hardware-flash paths (BOOTSEL drive, desktop picotool,
+    # browser download) need this one; the emulator keeps loading the .bin.
+    uf2_content: str | None = None
     has_wifi: bool = False             # True when sketch uses WiFi (ESP32 only)
     stdout: str
     stderr: str
@@ -740,6 +744,7 @@ async def _run_compile(
             hex_content=result.get("hex_content"),
             binary_content=result.get("binary_content"),
             binary_type=result.get("binary_type"),
+            uf2_content=result.get("uf2_content"),
             has_wifi=result.get("has_wifi", False),
             stdout=result.get("stdout", ""),
             stderr=result.get("stderr", ""),
@@ -774,6 +779,7 @@ async def _run_compile(
         hex_content=result.get("hex_content"),
         binary_content=result.get("binary_content"),
         binary_type=result.get("binary_type"),
+        uf2_content=result.get("uf2_content"),
         stdout=result.get("stdout", ""),
         stderr=result.get("stderr", ""),
         error=result.get("error"),

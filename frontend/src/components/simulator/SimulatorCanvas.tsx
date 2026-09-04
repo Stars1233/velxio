@@ -82,6 +82,7 @@ import {
 import { FlashModal } from './FlashModal';
 import { isTauri as isTauriRuntimeFn } from '../../desktop/tauriBridge';
 import { webFlashAvailable, webFlashMpyAvailable } from '../../lib/proWebFlash';
+import { boardKindHasUf2 } from '../../utils/uf2Download';
 import { isEsp32Family } from '../../types/boardOptions';
 import { BoardOptionsModal } from './BoardOptionsModal';
 import { useOscilloscopeStore } from '../../store/useOscilloscopeStore';
@@ -3725,14 +3726,19 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
           }
           // Flashing needs USB serial: the desktop shell always has it;
           // on the web the pro overlay may install a Web Serial flasher
-          // for this board kind (no-op in pure OSS builds).
-          if (isTauriRuntime || webFlashAvailable(board.boardKind)) {
+          // for this board kind (no-op in pure OSS builds). RP2040 / RP2350
+          // boards also program from a .uf2 dropped on their BOOTSEL drive,
+          // which needs no flasher at all, so their entry is always there:
+          // without a flasher the dialog offers the download.
+          const isMpy = board.languageMode === 'micropython';
+          const webFlashOk = webFlashAvailable(board.boardKind);
+          const uf2Only = !isTauriRuntime && !webFlashOk && !isMpy && boardKindHasUf2(board.boardKind);
+          if (isTauriRuntime || webFlashOk || uf2Only) {
             // MicroPython boards don't compile to a flash image — the store
             // keeps the 'micropython-loaded' sentinel. They flash only when
             // the overlay implements the MicroPython path (firmware install
             // + raw-REPL file upload); no compile step is required there,
             // the workspace files are always available.
-            const isMpy = board.languageMode === 'micropython';
             const mpyWebOk =
               isMpy && !isTauriRuntime && webFlashMpyAvailable(board.boardKind);
             // Arduino/ESP-IDF boards are always flashable: the Flash dialog
@@ -3745,9 +3751,11 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
                 ? mpyWebOk
                   ? t('editor.canvas.flashHint.mpy')
                   : t('editor.canvas.flashHint.mpyUnavailable')
-                : board.compiledProgram
-                  ? t('editor.canvas.flashHint.ready')
-                  : t('editor.canvas.flashHint.willCompile'),
+                : uf2Only
+                  ? t('editor.canvas.flashHint.uf2Download')
+                  : board.compiledProgram
+                    ? t('editor.canvas.flashHint.ready')
+                    : t('editor.canvas.flashHint.willCompile'),
               onSelect: () => {
                 setFlashModalFor(boardContextMenu.boardId);
                 setBoardContextMenu(null);

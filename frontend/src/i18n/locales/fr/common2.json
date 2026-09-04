@@ -178,7 +178,8 @@
         "mpy": "Installer MicroPython (si besoin) et envoyer ce projet vers une carte réelle branchée en USB",
         "mpyUnavailable": "Les projets MicroPython ne peuvent pas être flashés depuis ici : sketches Arduino uniquement",
         "ready": "Flasher le sketch compilé sur une carte réelle branchée en USB",
-        "willCompile": "Compiler le sketch et le flasher sur une carte réelle branchée en USB"
+        "willCompile": "Compiler le sketch et le flasher sur une carte réelle branchée en USB",
+        "uf2Download": "Compiler le sketch et telecharger le .uf2 pour le lecteur USB de la carte"
       },
       "wifiPanel": "Panneau WiFi"
     },
@@ -459,6 +460,21 @@
         "compiling": "Compilation du sketch avant le flash...",
         "recompiling": "Le code a changé depuis la dernière compilation : recompilation avant le flash...",
         "compiled": "Compilation OK en {{seconds}} s. Démarrage du flash..."
+      },
+      "downloadUf2": "Telecharger le .uf2",
+      "downloadUf2Hint": "Vous preferez copier le fichier vous-meme ? Enregistrez le .uf2 et deposez-le sur le lecteur USB de la carte (RPI-RP2 ou RP2350).",
+      "downloadOnlyIntro": "Ce navigateur ne peut pas flasher par USB (Web Serial et WebUSB n'existent que dans Chrome et Edge). Vous pouvez tout de meme telecharger le .uf2 compile et le copier sur la carte.",
+      "downloadOnlyHint": "Maintenez BOOTSEL en branchant la carte : elle apparait comme un lecteur USB. Deposez-y le fichier et la carte redemarre avec votre sketch.",
+      "compileDownload": "Compiler et telecharger le .uf2",
+      "downloaded": "{{file}} enregistre. Copiez-le sur le lecteur USB de la carte.",
+      "noUf2": "La compilation n'a produit aucun .uf2 pour cette carte. Recompilez avec le serveur actuel et reessayez.",
+      "bootloader": {
+        "title": "La carte n'est pas en mode bootloader ?",
+        "manual": "Maintenez le bouton BOOTSEL en branchant la carte, puis relachez-le. Elle apparait comme un lecteur USB nomme RPI-RP2 ou RP2350.",
+        "automatic": "Redemarrer en mode bootloader par USB",
+        "rebooting": "Redemarrage de la carte en mode bootloader...",
+        "rebooted": "Termine. La carte est en mode bootloader : cliquez sur le bouton de flash.",
+        "failed": "Impossible de redemarrer la carte : {{error}}"
       }
     }
   },

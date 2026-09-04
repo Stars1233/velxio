@@ -178,7 +178,8 @@
         "mpy": "Instalar o MicroPython (se necessário) e enviar este projeto para uma placa real conectada por USB",
         "mpyUnavailable": "Projetos MicroPython não podem ser gravados daqui: só sketches Arduino",
         "ready": "Gravar o sketch compilado em uma placa real conectada por USB",
-        "willCompile": "Compilar o sketch e gravá-lo em uma placa real conectada por USB"
+        "willCompile": "Compilar o sketch e gravá-lo em uma placa real conectada por USB",
+        "uf2Download": "Compilar o sketch e baixar o .uf2 para a unidade USB da placa"
       },
       "wifiPanel": "Painel WiFi"
     },
@@ -459,6 +460,21 @@
         "compiling": "Compilando o sketch antes de gravar...",
         "recompiling": "O código mudou desde a última compilação: recompilando antes de gravar...",
         "compiled": "Compilação OK em {{seconds}} s. Iniciando a gravação..."
+      },
+      "downloadUf2": "Baixar .uf2",
+      "downloadUf2Hint": "Prefere copiar o arquivo voce mesmo? Salve o .uf2 e solte na unidade USB da placa (RPI-RP2 ou RP2350).",
+      "downloadOnlyIntro": "Este navegador nao consegue gravar por USB (Web Serial e WebUSB existem apenas no Chrome e no Edge). Mesmo assim voce pode baixar o .uf2 compilado e copiar para a placa.",
+      "downloadOnlyHint": "Segure BOOTSEL ao conectar a placa: ela aparece como uma unidade USB. Solte o arquivo la e a placa reinicia com o seu sketch.",
+      "compileDownload": "Compilar e baixar .uf2",
+      "downloaded": "{{file}} salvo. Copie para a unidade USB da placa.",
+      "noUf2": "A compilacao nao produziu um .uf2 para esta placa. Recompile no servidor atual e tente de novo.",
+      "bootloader": {
+        "title": "A placa nao esta em modo bootloader?",
+        "manual": "Segure o botao BOOTSEL enquanto conecta a placa e depois solte. Ela aparece como uma unidade USB chamada RPI-RP2 ou RP2350.",
+        "automatic": "Reiniciar em modo bootloader via USB",
+        "rebooting": "Reiniciando a placa em modo bootloader...",
+        "rebooted": "Pronto. A placa esta em modo bootloader: clique no botao de gravar.",
+        "failed": "Nao foi possivel reiniciar a placa: {{error}}"
       }
     }
   },

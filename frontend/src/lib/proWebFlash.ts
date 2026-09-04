@@ -56,6 +56,41 @@ export interface WebFlashResult {
   elapsedMs: number;
 }
 
+/**
+ * How a board kind gets into its bootloader before a flash. Families whose
+ * bootloader is a separate USB personality (the RP2040 / RP2350 BOOTSEL
+ * mode) need the user to put the board there first; the flasher cannot do
+ * it from the bootloader side. `manual` is the button-and-cable
+ * instruction (the dialog has a default for it), `automatic` says whether
+ * `enterBootloader` can do it over USB for this kind.
+ */
+export interface BootloaderHint {
+  /** Overrides the dialog's default "hold the button while plugging in" copy. */
+  manual?: string;
+  /** True when `enterBootloader(boardKind)` is implemented for this kind. */
+  automatic: boolean;
+}
+
+/**
+ * Thrown by `preparePort` / `flash` when the board is not in bootloader
+ * mode (the device picker had nothing to offer, or the running firmware
+ * answered instead of the bootloader). The dialog turns it into the
+ * bootloader panel rather than a generic failure.
+ */
+export class NotInBootloaderError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotInBootloaderError';
+  }
+}
+
+export function isNotInBootloaderError(err: unknown): boolean {
+  return (
+    err instanceof NotInBootloaderError ||
+    (err instanceof Error && err.name === 'NotInBootloaderError')
+  );
+}
+
 export interface WebFlashImpl {
   /**
    * Whether this board kind can be flashed over Web Serial in this
@@ -82,6 +117,22 @@ export interface WebFlashImpl {
    * and asks for a second click to connect.
    */
   preparePort?(boardKind: string): Promise<void>;
+  /**
+   * Bootloader step for families that need one (see BootloaderHint).
+   * Optional — absent (or returning null) means the dialog shows no
+   * bootloader panel for that kind.
+   */
+  bootloaderHint?(boardKind: string): BootloaderHint | null;
+  /**
+   * Put the board into its bootloader over USB, from a user gesture (it
+   * asks for a serial port). Resolves once the board has gone away to
+   * re-enumerate as its bootloader; rejects with a user-presentable
+   * message when the running firmware does not react.
+   */
+  enterBootloader?(
+    boardKind: string,
+    onProgress: (p: WebFlashProgress) => void,
+  ): Promise<void>;
 }
 
 let _impl: WebFlashImpl | null = null;
@@ -120,6 +171,21 @@ export function webFlashAvailable(boardKind: string): boolean {
 export function webFlashMpyAvailable(boardKind: string): boolean {
   if (!_impl?.flashMicroPython) return false;
   return webFlashAvailable(boardKind);
+}
+
+/**
+ * The bootloader step the installed flasher wants for `boardKind`, or null
+ * (no impl, no method, or a family that needs none).
+ */
+export function webFlashBootloaderHint(boardKind: string): BootloaderHint | null {
+  if (!_impl?.bootloaderHint) return null;
+  try {
+    return _impl.bootloaderHint(boardKind);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[oss] web-flash impl threw in bootloaderHint():', err);
+    return null;
+  }
 }
 
 // ── Hardware-flash entitlement gate ─────────────────────────────────────
