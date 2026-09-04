@@ -151,7 +151,8 @@ def _discard_sketch_build_cache(sketch_dir: Path) -> None:
     """
     try:
         cache_root = Path.home() / '.cache' / 'arduino' / 'sketches'
-        digest = hashlib.md5(str(sketch_dir).encode('utf-8')).hexdigest().upper()
+        # MD5 because that is arduino-cli's own cache key (not a security use).
+        digest = hashlib.md5(str(sketch_dir).encode('utf-8'), usedforsecurity=False).hexdigest().upper()
         target = cache_root / digest
         if target.is_dir():
             shutil.rmtree(target, ignore_errors=True)
