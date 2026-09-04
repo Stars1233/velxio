@@ -138,7 +138,9 @@ export const ARDUINO_POSITION = DEFAULT_BOARD_POSITION;
 
 // ── Lightweight shim wrapping Esp32Bridge so component simulations (DHT22, etc.)
 // can call setPinState / pinManager just like they would on a local simulator. ──
-class Esp32BridgeShim {
+// Exported for tests only: the ADC channel map below is chip-specific and was
+// wrong for two whole chip families for months with nothing asserting it.
+export class Esp32BridgeShim {
   pinManager: PinManager;
   // Digital input pins are driven from the SPICE solve
   // (connectDigitalInputsToMcu), not the part-level seed — so a button reads
@@ -240,17 +242,42 @@ class Esp32BridgeShim {
   }
 
   /**
-   * Set ADC value for an ESP32 GPIO pin.
-   * ESP32 ADC1: GPIO 36-39 → CH0-3, GPIO 32-35 → CH4-7
-   * Returns true if the pin is a valid ADC pin.
+   * GPIO -> ADC channel, for `setAdcVoltage` and `setAdcWaveform`.
+   *
+   * The mapping is CHIP-specific, and there are two sources for it:
+   *
+   *   1. The bridge, when it implements `adcChannelForGpio`. A bridge that
+   *      knows which engine will run the board is the better authority,
+   *      because the answer can differ per BACKEND and not just per chip
+   *      (see the QEMU-only indices below). Private overlays install such a
+   *      bridge; it answers before connect(), which matters because part
+   *      attaches seed their ADC values before the run starts.
+   *   2. This map, otherwise. The plain `Esp32Bridge` does not implement
+   *      the method, so every QEMU-backed run lands here.
+   *
+   * Chip coverage of the fallback, all QEMU-backed:
+   *   - Classic ESP32: ADC1 on GPIO 36-39 (CH0-3) and 32-35 (CH4-7).
+   *   - ESP32-S3 family, including xiao-esp32-s3 and the S3-based
+   *     arduino-nano-esp32: ADC1 = GPIO 1-10 (CH0-9), ADC2 = GPIO 11-20 at
+   *     channel index 10-19, which is what the machine's SENS stub uses.
+   *     Without this branch analogRead always saw 0 there (2026-07
+   *     emulation-gaps audit, F1).
+   *   - ESP32-C3 family: ADC1 = GPIO0-4 -> CH0-4, and GPIO5 (ADC2_CH0) at
+   *     index 5. Verified against the qemu SARADC: esp32_adc_set{channel:3}
+   *     is what analogRead(3) returns (emulation-gaps harness, 2026-07-31).
+   *
+   * This used to be TWO methods with the same name in this class body, one
+   * holding the per-chip map and one holding the bridge delegation. Only
+   * the later definition existed at runtime, so the per-chip map was dead
+   * code and every QEMU run fell through to the classic ESP32 map: an S3 or
+   * C3 board resolved -1 for its real ADC pins and setAdcVoltage dropped the
+   * value, silently, which is the regression the per-chip map had been
+   * written to fix. esbuild warned on every build ("Duplicate member
+   * adcChannelForPin in class body") and the warning scrolled past.
    */
-  /** GPIO -> ADC channel for the bridge's board family. Classic ESP32:
-   * ADC1 on GPIO 36-39 (CH0-3) + 32-35 (CH4-7). ESP32-S3 family (incl.
-   * xiao-esp32-s3 and the S3-based arduino-nano-esp32): ADC1 = GPIO 1-10
-   * (CH0-9), ADC2 = GPIO 11-20 (stored at channel index 10-19, matching
-   * the machine's SENS stub). Without the S3 branch analogRead always saw
-   * 0 there (2026-07 emulation-gaps audit, F1). */
   private adcChannelForPin(pin: number): number {
+    const b = this.bridge as unknown as { adcChannelForGpio?: (gpio: number) => number };
+    if (typeof b.adcChannelForGpio === 'function') return b.adcChannelForGpio(pin);
     const kind = this.bridge.boardKind as string;
     if (kind === 'esp32-s3' || kind === 'xiao-esp32-s3' || kind === 'arduino-nano-esp32') {
       if (pin >= 1 && pin <= 10) return pin - 1;
@@ -258,9 +285,6 @@ class Esp32BridgeShim {
       return -1;
     }
     if (kind === 'esp32-c3' || kind === 'xiao-esp32-c3' || kind === 'aitewinrobot-esp32c3-supermini') {
-      // C3: ADC1 = GPIO0-4 -> CH0-4, GPIO5 (ADC2_CH0) -> index 5.
-      // Verified against the qemu SARADC: esp32_adc_set{channel:3} is what
-      // analogRead(3) returns (emulation-gaps harness, 2026-07-31).
       return pin >= 0 && pin <= 5 ? pin : -1;
     }
     if (pin >= 36 && pin <= 39) return pin - 36; // GPIO 36→CH0 … 39→CH3
@@ -274,18 +298,6 @@ class Esp32BridgeShim {
     const millivolts = Math.round(voltage * 1000);
     this.bridge.setAdc(channel, millivolts);
     return true;
-  }
-
-  /** GPIO -> ADC channel. The mapping is CHIP-specific, so ask the bridge
-   *  when it knows its chip (S3: GPIO1..10 -> ADC1 ch0..9; C-family differs);
-   *  fall back to the classic ESP32 map, which was the only one this shim
-   *  handled before and silently returned false for every S3 pin. */
-  private adcChannelForPin(pin: number): number {
-    const b = this.bridge as unknown as { adcChannelForGpio?: (gpio: number) => number };
-    if (typeof b.adcChannelForGpio === 'function') return b.adcChannelForGpio(pin);
-    if (pin >= 36 && pin <= 39) return pin - 36; // GPIO 36→CH0 .. 39→CH3
-    if (pin >= 32 && pin <= 35) return pin - 28; // GPIO 32→CH4 .. 35→CH7
-    return -1;
   }
 
   /**
