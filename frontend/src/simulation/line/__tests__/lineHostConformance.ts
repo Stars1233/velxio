@@ -50,7 +50,23 @@ export interface LineRig {
   clockHz(): number;
 }
 
-export function describeLineHostConformance(name: string, makeRig: () => LineRig): void {
+export interface LineConformanceOptions {
+  /**
+   * How far a scheduled edge may land from its target, in guest microseconds
+   * (case 5). Register-precise engines meet 2 us; an engine whose clock only
+   * advances in coarse spin-elision slices while it fast-forwards lands within
+   * a slice, and its own case-7 decode of a real 84-edge frame is the tighter
+   * proof that the time base is right.
+   */
+  edgeToleranceUs?: number;
+}
+
+export function describeLineHostConformance(
+  name: string,
+  makeRig: () => LineRig,
+  opts: LineConformanceOptions = {},
+): void {
+  const edgeToleranceUs = opts.edgeToleranceUs ?? 2;
   describe(`line-host conformance: ${name}`, () => {
     const collect = (rig: LineRig): PadEvent[] => {
       const events: PadEvent[] = [];
@@ -141,7 +157,7 @@ export function describeLineHostConformance(name: string, makeRig: () => LineRig
         if (rig.guest.read()) landed = rig.now() - t0;
       }
       expect(landed).toBeGreaterThan(0);
-      expect(Math.abs(landed / perUs - 100)).toBeLessThan(2 + 1 / perUs);
+      expect(Math.abs(landed / perUs - 100)).toBeLessThan(edgeToleranceUs + 1 / perUs);
     });
 
     it('6. owns the pads of an attached model and nothing else', () => {
