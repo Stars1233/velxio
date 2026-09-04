@@ -55,6 +55,27 @@ interface MenuEventPayload {
   route?: string;
 }
 
+/**
+ * Best-effort human-readable reason out of an unknown throw.
+ *
+ * `(err as Error).message` is a lie when the thrower isn't an Error —
+ * and tauri-plugin-updater rejects with a plain string ("Network
+ * Error: ... status: 401"). The cast compiles, `.message` evaluates to
+ * undefined, and the dialog reads "Update check failed: undefined",
+ * which hid a real 401 for several releases.
+ */
+function describeError(err: unknown): string {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'string' && err) return err;
+  try {
+    const json = JSON.stringify(err);
+    if (json && json !== '{}' && json !== 'null') return json;
+  } catch {
+    // Circular or non-serialisable — String() below still says something.
+  }
+  return String(err);
+}
+
 let installed = false;
 
 export async function installDesktopMenuListener(): Promise<void> {
@@ -149,7 +170,7 @@ function pickAndImportVlx(): void {
       try {
         await importVlxFile(file);
       } catch (err) {
-        showMessageDialog(`Failed to open .vlx: ${(err as Error).message}`, {
+        showMessageDialog(`Failed to open .vlx: ${describeError(err)}`, {
           kind: 'error',
         });
       }
@@ -257,7 +278,7 @@ async function checkForUpdates(): Promise<void> {
       showMessageDialog('Velxio Desktop is up to date.', { kind: 'success' });
     }
   } catch (err) {
-    showMessageDialog(`Update check failed: ${(err as Error).message}`, {
+    showMessageDialog(`Update check failed: ${describeError(err)}`, {
       kind: 'error',
     });
   }

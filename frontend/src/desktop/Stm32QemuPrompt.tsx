@@ -22,7 +22,11 @@ const STM32_CONFIG: QemuRuntimeConfig = {
   eligibilityCmd: 'stm32_qemu_eligibility',
   installCmd: 'stm32_qemu_install',
   progressEvent: 'velxio://stm32-qemu-progress',
-  sizeNote: '~30 MB',
+  // Upper bound across platforms: libqemu-arm.so is 54 MB on Linux,
+  // the Windows libqemu-arm DLL is 59 MB. '~30 MB' understated both by
+  // about half — the kind of surprise that makes someone cancel a
+  // download they already started.
+  sizeNote: '~60 MB',
 };
 
 export const Stm32QemuPrompt = () => <QemuDownloadPrompt config={STM32_CONFIG} />;
