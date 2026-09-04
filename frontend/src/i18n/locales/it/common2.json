@@ -178,7 +178,8 @@
         "mpy": "Installa MicroPython (se serve) e carica questo progetto su una scheda reale collegata via USB",
         "mpyUnavailable": "I progetti MicroPython non si possono caricare da qui: solo sketch Arduino",
         "ready": "Carica lo sketch compilato su una scheda reale collegata via USB",
-        "willCompile": "Compila lo sketch e caricalo su una scheda reale collegata via USB"
+        "willCompile": "Compila lo sketch e caricalo su una scheda reale collegata via USB",
+        "uf2Download": "Compila lo sketch e scarica il .uf2 per l'unita USB della scheda"
       },
       "wifiPanel": "Pannello WiFi"
     },
@@ -459,6 +460,21 @@
         "compiling": "Compilazione dello sketch prima del flash...",
         "recompiling": "Il codice è cambiato dall'ultima build: ricompilazione prima del flash...",
         "compiled": "Build OK in {{seconds}} s. Avvio del flash..."
+      },
+      "downloadUf2": "Scarica .uf2",
+      "downloadUf2Hint": "Preferisci copiare il file a mano? Salva il .uf2 e trascinalo sull'unita USB della scheda (RPI-RP2 o RP2350).",
+      "downloadOnlyIntro": "Questo browser non puo programmare via USB (Web Serial e WebUSB esistono solo in Chrome ed Edge). Puoi comunque scaricare il .uf2 compilato e copiarlo sulla scheda.",
+      "downloadOnlyHint": "Tieni premuto BOOTSEL mentre colleghi la scheda: compare come unita USB. Trascina li il file e la scheda si riavvia con il tuo sketch.",
+      "compileDownload": "Compila e scarica .uf2",
+      "downloaded": "Salvato {{file}}. Copialo sull'unita USB della scheda.",
+      "noUf2": "La compilazione non ha prodotto alcun .uf2 per questa scheda. Ricompila con il server attuale e riprova.",
+      "bootloader": {
+        "title": "La scheda non e in modalita bootloader?",
+        "manual": "Tieni premuto il pulsante BOOTSEL mentre colleghi la scheda, poi rilascialo. Compare come unita USB chiamata RPI-RP2 o RP2350.",
+        "automatic": "Riavvia in modalita bootloader via USB",
+        "rebooting": "Riavvio della scheda in modalita bootloader...",
+        "rebooted": "Fatto. La scheda e in modalita bootloader: premi il pulsante di programmazione.",
+        "failed": "Impossibile riavviare la scheda: {{error}}"
       }
     }
   },

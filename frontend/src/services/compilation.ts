@@ -42,6 +42,8 @@ export interface CompileResult {
   hex_content?: string;
   binary_content?: string; // base64-encoded .bin for RP2040
   binary_type?: 'bin' | 'uf2';
+  /** RP2040 / RP2350: base64 .uf2 for hardware flash (the .bin above feeds the emulator). */
+  uf2_content?: string | null;
   has_wifi?: boolean; // True when sketch uses WiFi (ESP32 only)
   stdout: string;
   stderr: string;

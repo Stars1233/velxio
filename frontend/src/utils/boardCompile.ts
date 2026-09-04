@@ -123,7 +123,7 @@ export async function compileBoardForFlash(
       return { ok: false, error: 'Compilation produced no program', elapsedMs };
     }
     const sim = useSimulatorStore.getState();
-    sim.compileBoardProgram(board.id, program);
+    sim.compileBoardProgram(board.id, program, { uf2: result.uf2_content ?? null });
     if (result.has_wifi !== undefined) sim.updateBoard(board.id, { hasWifi: result.has_wifi });
     return { ok: true, program, elapsedMs };
   } catch (err) {

@@ -146,6 +146,14 @@ export interface BoardInstance {
    * and rebuilds). Undefined for builds recorded before this field existed.
    */
   compiledSourceHash?: string | null;
+  /**
+   * RP2040 / RP2350 only: the .uf2 the compile produced next to the .bin,
+   * base64. `compiledProgram` stays the raw .bin the emulator loads; this is
+   * what real hardware takes (BOOTSEL drive, picotool, the flash dialog's
+   * download link). Null for other families and for builds recorded before
+   * the field existed.
+   */
+  compiledUf2?: string | null;
   serialOutput: string;
   serialBaudRate: number;
   serialMonitorOpen: boolean;

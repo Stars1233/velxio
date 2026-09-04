@@ -71,6 +71,7 @@ async def compile_project(
       - hex_content (str | null)    Intel HEX for AVR boards
       - binary_content (str | null) Base-64 .bin/.uf2 for RP2040
       - binary_type (str | null)    'bin' or 'uf2'
+      - uf2_content (str | null)   Base-64 .uf2 for RP2040/RP2350 (hardware flash)
       - stdout (str)
       - stderr (str)
       - error (str | null)

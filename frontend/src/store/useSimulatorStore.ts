@@ -1122,7 +1122,15 @@ interface SimulatorState {
   updateBoard: (boardId: string, updates: Partial<BoardInstance>) => void;
   setBoardPosition: (pos: { x: number; y: number }, boardId?: string) => void;
   setActiveBoardId: (boardId: string) => void;
-  compileBoardProgram: (boardId: string, program: string) => void;
+  /**
+   * Record a board's build. `extras.uf2` is the RP2 hardware-flash artifact
+   * (see BoardInstance.compiledUf2); omitted/null for every other family.
+   */
+  compileBoardProgram: (
+    boardId: string,
+    program: string,
+    extras?: { uf2?: string | null },
+  ) => void;
   loadMicroPythonProgram: (
     boardId: string,
     files: Array<{ name: string; content: string }>,
@@ -1987,7 +1995,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
       useEditorStore.getState().setActiveGroup(board.activeFileGroupId);
     },
 
-    compileBoardProgram: (boardId: string, program: string) => {
+    compileBoardProgram: (boardId: string, program: string, extras?: { uf2?: string | null }) => {
       const board = get().boards.find((b) => b.id === boardId);
       if (!board) {
         console.warn(`[compileBoardProgram] board not found: ${boardId}`);
@@ -2051,9 +2059,14 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
         board,
         useEditorStore.getState().getGroupFiles(board.activeFileGroupId),
       );
+      // The .uf2 rides along for RP2 boards (hardware flash); everything
+      // else leaves it null so a stale one never outlives its build.
+      const compiledUf2 = extras?.uf2 ?? null;
       set((s) => {
         const boards = s.boards.map((b) =>
-          b.id === boardId ? { ...b, compiledProgram: program, compiledSourceHash } : b,
+          b.id === boardId
+            ? { ...b, compiledProgram: program, compiledSourceHash, compiledUf2 }
+            : b,
         );
         const isActive = s.activeBoardId === boardId;
         return {
@@ -2336,7 +2349,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
 
       set((s) => {
         const boards = s.boards.map((b) =>
-          b.id === boardId ? { ...b, compiledProgram: 'micropython-loaded' } : b,
+          b.id === boardId ? { ...b, compiledProgram: 'micropython-loaded', compiledUf2: null } : b,
         );
         const isActive = s.activeBoardId === boardId;
         return {
@@ -2367,7 +2380,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
       set((s) => ({
         boards: s.boards.map((b) =>
           b.id === boardId
-            ? { ...b, languageMode: mode, compiledProgram: null, hasWifi: undefined }
+            ? { ...b, languageMode: mode, compiledProgram: null, compiledUf2: null, hasWifi: undefined }
             : b,
         ),
       }));
@@ -2899,6 +2912,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
                   ...b,
                   boardKind: type as BoardKind,
                   compiledProgram: null,
+                  compiledUf2: null,
                   serialOutput: '',
                   serialBaudRate: 0,
                 }
@@ -2938,6 +2952,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
                   ...b,
                   boardKind: type as BoardKind,
                   compiledProgram: null,
+                  compiledUf2: null,
                   serialOutput: '',
                   serialBaudRate: 0,
                 }

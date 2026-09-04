@@ -8,6 +8,9 @@ import {
   installWebFlashImpl,
   webFlashAvailable,
   webFlashMpyAvailable,
+  webFlashBootloaderHint,
+  isNotInBootloaderError,
+  NotInBootloaderError,
   type WebFlashImpl,
 } from '../lib/proWebFlash';
 
@@ -62,5 +65,40 @@ describe('proWebFlash seam', () => {
     expect(webFlashAvailable('esp32')).toBe(false);
     expect(warn).toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  it('has no bootloader step unless the impl declares one for the kind', () => {
+    expect(webFlashBootloaderHint('raspberry-pi-pico')).toBeNull(); // no impl
+    installWebFlashImpl(fakeImpl(() => true));
+    expect(webFlashBootloaderHint('raspberry-pi-pico')).toBeNull(); // impl without the method
+    installWebFlashImpl({
+      ...fakeImpl(() => true),
+      bootloaderHint: (kind) => (kind === 'raspberry-pi-pico' ? { automatic: true } : null),
+    });
+    expect(webFlashBootloaderHint('raspberry-pi-pico')).toEqual({ automatic: true });
+    expect(webFlashBootloaderHint('esp32')).toBeNull();
+  });
+
+  it('swallows a throwing bootloaderHint() like available()', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    installWebFlashImpl({
+      ...fakeImpl(() => true),
+      bootloaderHint: () => {
+        throw new Error('overlay bug');
+      },
+    });
+    expect(webFlashBootloaderHint('raspberry-pi-pico')).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  it('recognises the not-in-bootloader error by class and by name', () => {
+    expect(isNotInBootloaderError(new NotInBootloaderError('not in BOOTSEL'))).toBe(true);
+    // A copy that crossed a module boundary keeps the name, not the prototype.
+    const foreign = new Error('not in BOOTSEL');
+    foreign.name = 'NotInBootloaderError';
+    expect(isNotInBootloaderError(foreign)).toBe(true);
+    expect(isNotInBootloaderError(new Error('port busy'))).toBe(false);
+    expect(isNotInBootloaderError('nope')).toBe(false);
   });
 });

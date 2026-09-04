@@ -178,7 +178,8 @@
         "mpy": "MicroPython installieren (falls nötig) und dieses Projekt auf ein echtes, per USB angeschlossenes Board laden",
         "mpyUnavailable": "MicroPython-Projekte können von hier aus nicht geflasht werden: nur Arduino-Sketches",
         "ready": "Den kompilierten Sketch auf ein echtes, per USB angeschlossenes Board flashen",
-        "willCompile": "Den Sketch kompilieren und auf ein echtes, per USB angeschlossenes Board flashen"
+        "willCompile": "Den Sketch kompilieren und auf ein echtes, per USB angeschlossenes Board flashen",
+        "uf2Download": "Sketch kompilieren und die .uf2 fuer das USB-Laufwerk des Boards herunterladen"
       },
       "wifiPanel": "WLAN-Panel"
     },
@@ -459,6 +460,21 @@
         "compiling": "Sketch wird vor dem Flashen kompiliert...",
         "recompiling": "Code seit dem letzten Build geändert: wird vor dem Flashen neu kompiliert...",
         "compiled": "Build OK in {{seconds}} s. Flashen startet..."
+      },
+      "downloadUf2": ".uf2 herunterladen",
+      "downloadUf2Hint": "Lieber selbst kopieren? Speichere die .uf2 und lege sie auf das USB-Laufwerk des Boards (RPI-RP2 oder RP2350).",
+      "downloadOnlyIntro": "Dieser Browser kann nicht per USB flashen (Web Serial und WebUSB gibt es nur in Chrome und Edge). Du kannst die kompilierte .uf2 trotzdem herunterladen und auf das Board kopieren.",
+      "downloadOnlyHint": "Halte BOOTSEL beim Einstecken gedrueckt: das Board erscheint als USB-Laufwerk. Lege die Datei dort ab, und das Board startet mit deinem Sketch neu.",
+      "compileDownload": "Kompilieren und .uf2 herunterladen",
+      "downloaded": "{{file}} gespeichert. Kopiere die Datei auf das USB-Laufwerk des Boards.",
+      "noUf2": "Der Build hat keine .uf2 fuer dieses Board erzeugt. Kompiliere gegen den aktuellen Server neu und versuche es erneut.",
+      "bootloader": {
+        "title": "Board nicht im Bootloader-Modus?",
+        "manual": "Halte die BOOTSEL-Taste beim Einstecken gedrueckt und lasse sie dann los. Das Board erscheint als USB-Laufwerk namens RPI-RP2 oder RP2350.",
+        "automatic": "Per USB in den Bootloader neu starten",
+        "rebooting": "Board wird in den Bootloader-Modus neu gestartet...",
+        "rebooted": "Fertig. Das Board ist im Bootloader-Modus: klicke auf Flashen.",
+        "failed": "Das Board konnte nicht neu gestartet werden: {{error}}"
       }
     }
   },
