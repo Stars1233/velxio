@@ -320,6 +320,35 @@ export function getBoardBuiltins(kind: string): BuiltinsAttach | undefined {
   return registry.get(kind)?.attachBuiltins ?? boardBuiltins.get(kind);
 }
 
+// ── Line-owning sensor support per board kind (simulation/line) ────────────
+// A board that hosts a line-owning sensor (DHT22, HC-SR04) a way the generic
+// simulator shim cannot see declares it here. The Raspberry Pi family reads
+// its pins over a serial link and models no timed edges, so it defaults to a
+// refusal; the UNIHIKER serves those two sensors as named slider values (a
+// hosted model, like the ESP32 QEMU worker), so the overlay registers a
+// `hosted` declaration for it. Kept as a per-kind registry rather than a
+// ProBoardDef field so an OSS-rendered kind can carry it without a stub def —
+// the same seam as registerBoardBuiltins / registerGuestSetup above.
+//
+// Typed structurally so this OSS module does not import the line contract's
+// types: `mode` is 'local' | 'hosted' | 'none', with the fields each carries.
+export type BoardLineSupport =
+  | { mode: 'local' }
+  | { mode: 'hosted'; models: readonly string[] }
+  | { mode: 'none'; why: string };
+
+const boardLineSupport = new Map<string, BoardLineSupport>();
+
+export function registerBoardLineSupport(kind: string, support: BoardLineSupport): void {
+  boardLineSupport.set(kind, support);
+}
+
+/** The line-support declaration an overlay registered for a board kind, or
+ *  undefined when none — the caller applies its own default. */
+export function getBoardLineSupport(kind: string): BoardLineSupport | undefined {
+  return boardLineSupport.get(kind);
+}
+
 /**
  * Seed files for a board kind in a given language mode, or undefined when the
  * board carries no seed of its own (the editor's family default applies).

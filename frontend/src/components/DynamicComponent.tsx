@@ -25,6 +25,7 @@ import { buildProjectSdImage, decodeSdFiles } from '../utils/sdCardFiles';
 import { PartSimulationRegistry } from '../simulation/parts';
 import { dispatchSensorUpdate } from '../simulation/SensorUpdateRegistry';
 import { isPiBoardKind } from '../types/board';
+import { getBoardLineSupport } from '../lib/proBoardRegistry';
 import { isKeyBindable, formatKeyLabel } from '../utils/keyButtonBindings';
 import {
   createDefaultPinResolver,
@@ -509,9 +510,10 @@ export const DynamicComponent: React.FC<DynamicComponentProps> = ({
           const board = boardId ? st.boards.find((b) => b.id === boardId) : undefined;
           if (!board) continue;
           if (anyBoardId === null) anyBoardId = board.id;
-          if (isPiBoardKind(board.boardKind)) return { piBoardId: board.id, wiredBoardId: board.id };
+          if (isPiBoardKind(board.boardKind))
+            return { piBoardId: board.id, piBoardKind: board.boardKind, wiredBoardId: board.id };
         }
-        return { piBoardId: null, wiredBoardId: anyBoardId };
+        return { piBoardId: null, piBoardKind: null, wiredBoardId: anyBoardId };
       })();
       const piSimulator = piBoardId
         ? ({
@@ -523,16 +525,21 @@ export const DynamicComponent: React.FC<DynamicComponentProps> = ({
             isRunning: () =>
               !!useSimulatorStore.getState().boards.find((b) => b.id === piBoardId)?.running,
             pinManager: getBoardPinManager(piBoardId),
-            // The line contract's declaration. A QEMU-Linux guest reads its
-            // pins over a serial link to the backend (measured: ~120 reads/s,
-            // 8 ms per read) and the bridge carries levels, not timed edges,
-            // so a single-wire sensor's reply has nowhere to land in guest
-            // time. Said here, so the part hears it instead of waiting on a
-            // silent pad.
-            lineSupport: () => ({
-              mode: 'none' as const,
-              why: 'this board runs a Linux guest that reads its pins over a serial link; timed single-wire sensors are not modelled',
-            }),
+            // The line contract's declaration for this Pi-family board. Most
+            // QEMU-Linux boards read their pins over a serial link to the
+            // backend (measured ~120 reads/s) and carry levels, not timed
+            // edges, so a single-wire sensor's reply has nowhere to land in
+            // guest time: they DEFAULT to a refusal, said here so the part
+            // hears it and the circuit check shows it, instead of waiting on a
+            // silent pad. A board that DOES serve those sensors another way
+            // overrides this through registerBoardLineSupport (the UNIHIKER
+            // delivers DHT22 / HC-SR04 as named slider values, so the overlay
+            // declares it `hosted`).
+            lineSupport: () =>
+              (piBoardKind && getBoardLineSupport(piBoardKind)) ?? {
+                mode: 'none' as const,
+                why: 'this board runs a Linux guest that reads its pins over a serial link; timed single-wire sensors are not modelled here',
+              },
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } as any)
         : null;
