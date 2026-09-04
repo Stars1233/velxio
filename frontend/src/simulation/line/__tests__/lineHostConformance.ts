@@ -160,14 +160,18 @@ export function describeLineHostConformance(name: string, makeRig: () => LineRig
       expect(answer.mode).toBe('local');
       const us = (n: number) => Math.round((n * rig.clockHz()) / 1e6);
       const edgesSeen: boolean[] = [];
-      let last = rig.guest.read();
+      const stamps: string[] = []; // "<us>:<H|L>" per edge, for the failure message
+      let last = false;
+      let sampleStart = 0;
       const sample = (cycles: number) => {
         const step = Math.max(1, us(2));
+        sampleStart = rig.now();
         for (let done = 0; done < cycles; done += step) {
           rig.run(step);
           const v = rig.guest.read();
           if (v !== last) {
             edgesSeen.push(v);
+            stamps.push(`${Math.round((rig.now() - sampleStart) / us(1))}:${v ? 'H' : 'L'}`);
             last = v;
           }
         }
@@ -181,17 +185,23 @@ export function describeLineHostConformance(name: string, makeRig: () => LineRig
         rig.guest.modeInput(1);
       };
       startSignal();
+      // The idle level is what the pull-up makes it once the guest enabled it:
+      // on a board whose released pad floats before that, reading it earlier
+      // would count the pull-up itself as an edge. The reply starts 20 us later.
+      last = rig.guest.read();
+      expect(last).toBe(true);
       sample(us(6000));
       // 2 preamble + 80 data + 2 release edges. The first LOW is the first edge.
-      expect(edgesSeen.length, `edges seen: ${edgesSeen.length}`).toBe(84);
+      expect(edgesSeen.length, `edges seen: ${edgesSeen.length} [${stamps.join(' ')}]`).toBe(84);
       expect(edgesSeen[0]).toBe(false);
       expect(edgesSeen[edgesSeen.length - 1]).toBe(true);
       expect(rig.guest.read()).toBe(true); // idles HIGH between reads
 
       edgesSeen.length = 0;
       startSignal();
+      last = rig.guest.read();
       sample(us(6000));
-      expect(edgesSeen.length, 'the second read got no reply').toBe(84);
+      expect(edgesSeen.length, `the second read: ${edgesSeen.length} edges [${stamps.slice(-90).join(' ')}]`).toBe(84);
       if (answer.mode !== 'none') answer.release();
     });
 
