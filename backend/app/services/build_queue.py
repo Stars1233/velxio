@@ -29,6 +29,18 @@ priority jobs use the whole lane.
 The reservation is skipped for a lane with `capacity < 2`, where holding a slot
 back would invert the priority order instead of merely softening it.
 
+Priority burst
+--------------
+Ordering alone still leaves a paid build waiting for a slot when the lane is
+full of standard builds. A lane may therefore carry `priority_burst` extra
+admissions that ONLY priority jobs can use: while fewer than `capacity +
+priority_burst` jobs run, a waiting priority job is admitted at once, above
+capacity. Standard jobs never use the burst, and the reserved standard slot
+still holds on the regular slots, so a free build keeps advancing exactly as
+before; the cost is one extra build on the box for the seconds it runs. The
+burst is what turns "compiled first" into "starts now" for a subscriber on
+velxio.dev, and it is 0 (off) unless the deployment sets it.
+
 Privacy
 -------
 `load_level()` is the ONLY queue fact this module is meant to reach a client
@@ -95,6 +107,8 @@ class _Waiter:
     future: "asyncio.Future[None]"
     enqueued_at: float = field(default_factory=time.monotonic)
     admitted: bool = False
+    #: Admitted above capacity through the priority burst.
+    burst: bool = False
     #: Caller-supplied handle (the compile job id) so a job can be re-ordered
     #: after it is already queued — see `reprioritize`.
     key: Optional[str] = None
@@ -107,10 +121,13 @@ class BuildQueue:
     so the counters can never be observed halfway through an admission.
     """
 
-    def __init__(self, name: str, capacity: int) -> None:
+    def __init__(self, name: str, capacity: int, priority_burst: int = 0) -> None:
         self.name = name
         self.capacity = max(1, capacity)
+        #: Admissions above `capacity` reserved for priority jobs (0 = none).
+        self.priority_burst = max(0, int(priority_burst))
         self._active = 0
+        self._burst_active = 0
         self._priority_active = 0
         self._standard_waiting = 0
         self._heap: list[tuple[int, int, _Waiter]] = []
@@ -130,6 +147,11 @@ class BuildQueue:
     @property
     def waiting(self) -> int:
         return len(self._heap)
+
+    @property
+    def burst_active(self) -> int:
+        """Jobs currently running above capacity (priority burst admissions)."""
+        return self._burst_active
 
     @property
     def pressure(self) -> float:
@@ -201,9 +223,34 @@ class BuildQueue:
                 return standard
         return self._take_best()
 
+    def _take_best_priority(self) -> Optional[_Waiter]:
+        """The best waiter, but only if it is a priority job (burst admission).
+
+        The heap orders by (priority, seq), so when its head is a standard job
+        there is no priority job waiting at all.
+        """
+        self._drop_cancelled()
+        if self._heap and not self._heap[0][2].standard:
+            return self._take_best()
+        return None
+
     def _pump(self) -> None:
-        while self._active < self.capacity:
-            waiter = self._select()
+        # Regular slots and burst slots are accounted separately on purpose.
+        # Deriving "burst" from active - capacity looked simpler but broke the
+        # standard reservation: once a burst job was running, every regular
+        # slot that freed up was re-filled through the burst path, which knows
+        # nothing about the reserved slot, and a free build sat behind twelve
+        # paid ones. A regular slot that frees up is filled by `_select`, with
+        # all its fairness rules; the burst only ever admits ABOVE that.
+        while True:
+            burst = False
+            if self._active - self._burst_active < self.capacity:
+                waiter = self._select()
+            elif self._burst_active < self.priority_burst:
+                waiter = self._take_best_priority()
+                burst = True
+            else:
+                return
             if waiter is None:
                 return
             if waiter.future.done():
@@ -211,16 +258,25 @@ class BuildQueue:
                 # the slot to, so try the next waiter without consuming it.
                 continue
             waiter.admitted = True
+            waiter.burst = burst
             self._active += 1
+            if burst:
+                self._burst_active += 1
             if waiter.standard:
                 self._consecutive_priority = 0
             else:
                 self._priority_active += 1
-                self._consecutive_priority += 1
+                # A burst admission took nothing a standard job could have
+                # used, so it does not count against the consecutive-priority
+                # fairness counter of a one-slot lane.
+                if not burst:
+                    self._consecutive_priority += 1
             waiter.future.set_result(None)
 
     def _release(self, waiter: _Waiter) -> None:
         self._active -= 1
+        if waiter.burst:
+            self._burst_active -= 1
         if not waiter.standard:
             self._priority_active -= 1
         self._pump()
@@ -260,6 +316,8 @@ class BuildQueue:
             waiter.standard = False
             self._heap[idx] = (priority, seq, waiter)
             heapq.heapify(self._heap)
+            # A lifted job may now qualify for a burst admission.
+            self._pump()
             return True
         return False
 
@@ -319,8 +377,26 @@ class BuildQueue:
 # 30 and made every build slower than running them two at a time.
 # LIGHT = arduino-cli boards (AVR, RP2040, STM32...): seconds each, so they get
 # their own lane and never queue behind an ESP-IDF cold build.
-HEAVY = BuildQueue("heavy", _env_slots("VELXIO_HEAVY_BUILD_SLOTS", 2))
-LIGHT = BuildQueue("light", _env_slots("VELXIO_LIGHT_BUILD_SLOTS", 3))
+def _env_burst(name: str, default: int) -> int:
+    """Priority-burst admissions for a lane, 0..8. 0 (the OSS default) = off."""
+    try:
+        value = int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        logger.warning("[queue] %s is not an integer; using %d", name, default)
+        return default
+    return max(0, min(8, value))
+
+
+HEAVY = BuildQueue(
+    "heavy",
+    _env_slots("VELXIO_HEAVY_BUILD_SLOTS", 2),
+    priority_burst=_env_burst("VELXIO_HEAVY_PRIORITY_BURST", 0),
+)
+LIGHT = BuildQueue(
+    "light",
+    _env_slots("VELXIO_LIGHT_BUILD_SLOTS", 3),
+    priority_burst=_env_burst("VELXIO_LIGHT_PRIORITY_BURST", 0),
+)
 
 _LANES = (HEAVY, LIGHT)
 
@@ -359,6 +435,8 @@ def debug_snapshot() -> dict:
             "active": lane.active,
             "waiting": lane.waiting,
             "capacity": lane.capacity,
+            "priority_burst": lane.priority_burst,
+            "burst_active": lane.burst_active,
         }
         for lane in _LANES
     }

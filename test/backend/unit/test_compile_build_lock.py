@@ -1,25 +1,24 @@
 """
-The compile lock must protect the BUILD DIRECTORY, not the FQBN.
+The compile route holds NO build lock of its own; the compiler does.
 
-`_prepare_persistent_project_dir` keys the persistent build dir on
-(idf_target, variant). arduino-esp32's boards.txt gives several boards the same
-variant — `esp32` and `esp32cam` are both `build.variant=esp32` — so those FQBNs
-share one directory. The lock used to be keyed on the FQBN, which left them free
-to build in it at the same time.
+Until 2026-09 `routes/compile.py` took a per-target `asyncio.Lock` keyed on
+(idf_target, arduino variant) INSIDE the lane slot. The compiler has since
+grown its own lock per persistent build dir (`_variant_lock`, one per variant
+or replica), which protects exactly the shared resource. Keeping the coarser
+route lock on top cost velxio.dev its second heavy slot: 78% of ESP-IDF builds
+are esp32:esp32:esp32, so the second slot spent whole hours holding a slot
+while blocked on the lock (2026-09-02 12:00: one slot 3647 s of build time,
+the other 943 s, queue p50 43 minutes).
 
-That is not a theoretical race. Measured against staging: compiling
-`esp32:esp32:esp32` and `esp32:esp32:esp32cam` concurrently returned
-BYTE-IDENTICAL firmware (same sha256, 285504 bytes) and the esp32cam caller got
-the other sketch's binary — verified by embedding a unique marker string in each
-sketch and finding the wrong one in the returned image. In the product that
-surfaced as a gallery example running someone else's program: open two ESP32
-examples in two tabs, and the first tab shows the second's serial log and does
-nothing itself.
+`_build_identity` stays: the duration estimate is keyed on it, and it still
+has to name the build DIRECTORY (esp32 and esp32cam share one) rather than the
+FQBN.
 
 Run from the repo root:
     python -m pytest test/backend/unit/test_compile_build_lock.py -v
 """
 
+import inspect
 import sys
 import unittest
 from pathlib import Path
@@ -29,80 +28,48 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'backend'))
 from app.api.routes import compile as compile_module
 
 
+class RouteHoldsNoBuildLockTests(unittest.TestCase):
+    def test_the_route_level_target_lock_is_gone(self):
+        self.assertFalse(
+            hasattr(compile_module, '_target_lock'),
+            'the per-target lock is back in the route; it serialises every '
+            'esp32 build and wastes the second heavy slot (see module docstring)',
+        )
+        self.assertFalse(hasattr(compile_module, '_TARGET_LOCKS'))
+
+    def test_the_job_runner_does_not_lock_inside_the_slot(self):
+        source = inspect.getsource(compile_module._compile_job)
+        self.assertNotIn('_target_lock', source)
+        self.assertIn('lane.slot(', source)
+
+    def test_the_sync_route_does_not_lock_inside_the_slot(self):
+        source = inspect.getsource(compile_module.compile_sketch)
+        self.assertNotIn('_target_lock', source)
+
+
 class BuildIdentityTests(unittest.TestCase):
-    def test_boards_sharing_a_variant_share_one_lock(self):
-        """esp32 and esp32cam build in the same dir, so they must serialise."""
-        plain = compile_module._target_lock('esp32:esp32:esp32')
-        cam = compile_module._target_lock('esp32:esp32:esp32cam')
-        self.assertIs(
-            plain,
-            cam,
-            'esp32 and esp32cam share one persistent build dir (both are '
-            'build.variant=esp32); handing them different locks lets them '
-            'corrupt each other and swap binaries.',
+    def test_boards_sharing_a_variant_share_one_identity(self):
+        """esp32 and esp32cam build in the same dir (both build.variant=esp32)."""
+        self.assertEqual(
+            compile_module._build_identity('esp32:esp32:esp32'),
+            compile_module._build_identity('esp32:esp32:esp32cam'),
         )
 
-    def test_the_same_board_still_serialises(self):
-        self.assertIs(
-            compile_module._target_lock('esp32:esp32:esp32'),
-            compile_module._target_lock('esp32:esp32:esp32'),
-        )
-
-    def test_different_chips_still_run_in_parallel(self):
-        """The lock must not become a global one — that would halve throughput."""
-        xtensa = compile_module._target_lock('esp32:esp32:esp32')
-        riscv = compile_module._target_lock('esp32:esp32:esp32c3')
-        self.assertIsNot(
-            xtensa,
-            riscv,
-            'different IDF targets have separate build dirs and should still '
-            'compile concurrently up to the semaphore cap.',
-        )
-
-    def test_non_esp32_boards_never_share_a_lock(self):
-        """Only the ESP-IDF lane has a shared persistent build dir.
-
-        This assertion was inverted until now: it required every unrecognised
-        FQBN to collapse onto the default (esp32, esp32) pair, on the reasoning
-        that over-serialising is the safe direction. `_build_identity` stopped
-        doing that deliberately — `_idf_target` defaults ANY unknown board to
-        'esp32', so an AVR / RP2040 / STM32 compile inherited the ESP32 key and
-        queued behind unrelated ESP-IDF builds it shares nothing with. There is
-        no correctness argument for that wait: those boards go through
-        arduino-cli, which has no shared build dir to corrupt.
-        """
-        a = compile_module._build_identity('definitely:not:a:board')
-        b = compile_module._build_identity('also:not:a:board')
+    def test_different_chips_have_different_identities(self):
         self.assertNotEqual(
-            a,
-            b,
-            'non-ESP32 FQBNs have no shared build dir, so each keeps its own '
-            'identity instead of collapsing onto the ESP32 default.',
-        )
-        self.assertIsNot(
-            compile_module._target_lock('arduino:avr:uno'),
-            compile_module._target_lock('rp2040:rp2040:rpipico'),
-            'an AVR build must not queue behind an ESP-IDF one.',
+            compile_module._build_identity('esp32:esp32:esp32'),
+            compile_module._build_identity('esp32:esp32:esp32c3'),
         )
 
-    def test_a_non_esp32_board_still_serialises_with_itself(self):
-        """Dropping the shared key must not drop the per-board lock too."""
-        self.assertIs(
-            compile_module._target_lock('arduino:avr:uno'),
-            compile_module._target_lock('arduino:avr:uno'),
+    def test_non_esp32_boards_keep_their_own_identity(self):
+        """`_idf_target` defaults unknown boards to esp32; a non-ESP32 FQBN
+        must not collapse onto that pair (it would share the esp32 estimate)."""
+        self.assertNotEqual(
+            compile_module._build_identity('definitely:not:a:board'),
+            compile_module._build_identity('also:not:a:board'),
         )
-
-    def test_unknown_esp32_boards_still_share_the_default_pair(self):
-        """The over-serialising fallback stays where it protects something.
-
-        An unrecognised `esp32:` FQBN still resolves through _idf_target to the
-        default pair and lands in that build dir, so it must keep sharing the
-        lock — serialising more than necessary costs throughput, serialising
-        less corrupts a build.
-        """
-        self.assertIs(
-            compile_module._target_lock('esp32:esp32:definitely-not-a-board'),
-            compile_module._target_lock('esp32:esp32:also-not-a-board'),
+        self.assertEqual(
+            compile_module._build_identity('arduino:avr:uno'), 'arduino:avr:uno',
         )
 
 

@@ -26,6 +26,9 @@ import string
 import subprocess
 import tempfile
 import threading
+import time
+from collections import deque
+from contextvars import ContextVar
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable, Optional
@@ -33,6 +36,49 @@ from typing import Callable, Optional
 from app.core.hooks import materialize_library_scope
 
 logger = logging.getLogger(__name__)
+
+# Per-task timing of the LAST compile() call: how long it waited for its build
+# dir, whether the configure was skipped, and how long cmake / ninja ran. The
+# compile route reads it right after `await compile()` (same asyncio task, so
+# the ContextVar is visible) and folds it into the usage metric. Kept out of
+# the result dict on purpose: the result is what the client receives, and the
+# wait behind another build is an operator number, not a user one.
+build_timing: ContextVar[Optional[dict]] = ContextVar('espidf_build_timing', default=None)
+
+
+def _timing_note(**fields) -> None:
+    current = build_timing.get() or {}
+    current.update(fields)
+    build_timing.set(current)
+
+
+# Set VELXIO_ESPIDF_ALWAYS_CONFIGURE=1 to run `cmake` before every ninja run
+# (the pre-2026-09 behaviour) without rebuilding the image. The default lets a
+# warm build dir go straight to ninja, which re-runs cmake by itself when a
+# configure input changed (build.ninja's RERUN_CMAKE rule).
+_ALWAYS_CONFIGURE = (
+    os.environ.get('VELXIO_ESPIDF_ALWAYS_CONFIGURE', '')
+    in ('1', 'true', 'True', 'yes')
+)
+
+
+def _write_if_changed(path: Path, text: str) -> bool:
+    """Write `text` to `path` only when the bytes differ. Returns True if written.
+
+    Every generated file that cmake lists as a configure dependency
+    (partitions.csv, velxio_board.cmake, a component's CMakeLists.txt) must go
+    through here: an unconditional write bumps the mtime, and ninja's
+    RERUN_CMAKE rule then re-runs the whole configure for a file that did not
+    change. That configure is 60% of a warm ESP32 build (measured 2026-09-04).
+    """
+    try:
+        if path.exists() and path.read_text(encoding='utf-8') == text:
+            return False
+    except (OSError, UnicodeDecodeError):
+        pass
+    path.write_text(text, encoding='utf-8')
+    return True
+
 
 # Location of the ESP-IDF project template (relative to this file)
 _TEMPLATE_DIR = Path(__file__).parent / 'esp-idf-template'
@@ -46,9 +92,10 @@ _TEMPLATE_DIR = Path(__file__).parent / 'esp-idf-template'
 # is a stable anchor: ninja's incremental cache + ccache hits combine to bring
 # warm compiles down to ~5-30s.
 #
-# Concurrent compiles to the SAME target would corrupt the shared build dir;
-# they're serialised by the per-target asyncio.Lock in routes/compile.py.
-# Different targets get different subdirs and run in parallel.
+# Concurrent compiles in the SAME variant dir would corrupt it; they're
+# serialised by _variant_lock below (one lock per variant, or per replica of a
+# variant). Different variants of one target, and different targets, run in
+# parallel up to the build queue's slot count.
 #
 # Set VELXIO_PERSISTENT_BUILD_DIR=0 to fall back to the legacy tempfile flow
 # without rebuilding the image (escape hatch if the persistent dir misbehaves
@@ -157,6 +204,26 @@ class _RunResult:
     stderr: str
 
 
+def _nice_preexec(nice: int | None):
+    """preexec_fn that lowers the child's CPU priority. None = inherit.
+
+    The API and the simulation WebSockets share the box with the compilers;
+    a positive nice keeps them responsive under a full CPU, and a per-job
+    value lets the overlay rank a paid build's processes above an anonymous
+    one's (weights 1024 vs 110 between nice 0 and nice 10) without ever
+    stopping or interrupting anyone.
+    """
+    if not nice or os.name == 'nt':
+        return None
+
+    def _apply() -> None:
+        try:
+            os.nice(int(nice))
+        except OSError:
+            pass
+    return _apply
+
+
 def _run_with_streaming(
     cmd: list[str],
     *,
@@ -164,6 +231,7 @@ def _run_with_streaming(
     env: dict[str, str],
     timeout: float,
     progress_callback: Optional[ProgressCallback],
+    nice: int | None = None,
 ) -> _RunResult:
     """Run `cmd` synchronously and stream stdout + stderr line-by-line.
 
@@ -175,9 +243,11 @@ def _run_with_streaming(
 
     Raises subprocess.TimeoutExpired on timeout (matches the existing flow).
     """
+    preexec = _nice_preexec(nice)
     if progress_callback is None:
         cp = subprocess.run(
             cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout,
+            preexec_fn=preexec,
         )
         return _RunResult(returncode=cp.returncode, stdout=cp.stdout, stderr=cp.stderr)
 
@@ -189,6 +259,7 @@ def _run_with_streaming(
         stderr=subprocess.PIPE,
         text=True,
         bufsize=1,  # line-buffered
+        preexec_fn=preexec,
     )
     stdout_lines: list[str] = []
     stderr_lines: list[str] = []
@@ -244,6 +315,87 @@ def _run_with_streaming(
 _MAX_BUILD_VARIANTS = 6
 
 
+def _max_build_variants(idf_target: str) -> int:
+    """Variant cap for one target: VELXIO_BUILD_VARIANTS_<TARGET> (e.g.
+    VELXIO_BUILD_VARIANTS_ESP32), else VELXIO_BUILD_VARIANTS, else the module
+    default. Per target because the hot target on velxio.dev rotates through
+    10 distinct variants in half an hour while the others idle at two."""
+    for name in (f'VELXIO_BUILD_VARIANTS_{idf_target.upper()}', 'VELXIO_BUILD_VARIANTS'):
+        raw = os.environ.get(name, '').strip()
+        if raw:
+            try:
+                return max(1, min(64, int(raw)))
+            except ValueError:
+                logger.warning(f'[espidf] {name}={raw!r} is not an integer; ignored')
+    return _MAX_BUILD_VARIANTS
+
+
+# ── Replicas of a hot variant ────────────────────────────────────────────────
+# Two compiles that hash to the SAME variant serialise on its lock, and on
+# velxio.dev the dominant configuration (the default esp32 blink, no
+# libraries) is 78% of all ESP-IDF builds: the second heavy slot spent its time
+# holding a slot while waiting for the first one's directory. A replica is a
+# second full copy of the variant (`v_<hash>_r1`), configured on first use and
+# then as warm as the original, with its own lock. A compile picks the first
+# replica whose lock is free. Replicas are only CREATED after the variant has
+# been found busy a few times in a short window, so a one-off library
+# combination never earns a second 400 MB tree.
+def _variant_replicas() -> int:
+    raw = os.environ.get('VELXIO_BUILD_VARIANT_REPLICAS', '').strip()
+    if not raw:
+        return 1
+    try:
+        return max(1, min(8, int(raw)))
+    except ValueError:
+        logger.warning(f'[espidf] VELXIO_BUILD_VARIANT_REPLICAS={raw!r} is not an integer; using 1')
+        return 1
+
+
+_REPLICA_COLLISION_THRESHOLD = 3     # busy hits before a new replica is created
+_REPLICA_COLLISION_WINDOW_S = 600.0  # ...within this many seconds
+_VARIANT_COLLISIONS: dict[str, deque] = {}
+#: Lock keys of replicas being built in the background right now. A replica
+#: is warmed by a background compile of the SAME sources (so its configure
+#: matches the variant) rather than by the user's job that hit the collision:
+#: a cold build is 30-75 s and that job would rather wait a few seconds for
+#: the original. While warming, the replica is neither picked nor re-created.
+_WARMING_REPLICAS: set[str] = set()
+_BACKGROUND_TASKS: set = set()
+
+
+def _note_variant_collision(base_key: str) -> bool:
+    """Record that every replica of `base_key` was busy. True when the streak
+    is long enough to justify creating the next replica."""
+    now = time.monotonic()
+    hits = _VARIANT_COLLISIONS.setdefault(base_key, deque())
+    hits.append(now)
+    while hits and now - hits[0] > _REPLICA_COLLISION_WINDOW_S:
+        hits.popleft()
+    return len(hits) >= _REPLICA_COLLISION_THRESHOLD
+
+
+def _variant_dir_name(variant_key: str, replica: int = 0) -> str:
+    safe = ''.join(c for c in variant_key if c.isalnum() or c in '-_')[:40] or 'default'
+    return 'v_' + safe + (f'_r{replica}' if replica else '')
+
+
+def _variant_lock_key(idf_target: str, variant_key: str, replica: int = 0) -> str:
+    base = f'{idf_target}/{variant_key}'
+    return base if not replica else f'{base}/r{replica}'
+
+
+_VARIANT_DIR_RE = re.compile(r'^v_(.+?)(?:_r(\d+))?$')
+
+
+def _lock_key_for_variant_dir(idf_target: str, dirname: str) -> str | None:
+    """Inverse of _variant_dir_name: the lock key a `v_*` directory is built
+    under, so eviction can tell whether someone is compiling in it."""
+    m = _VARIANT_DIR_RE.match(dirname)
+    if not m:
+        return None
+    return _variant_lock_key(idf_target, m.group(1), int(m.group(2) or 0))
+
+
 # One compile at a time per build variant. The build queue bounds how many
 # compiles run at once, not WHERE they run: two requests that hash to the same
 # variant (the deploy gate's smoke fired the S3 OLED example twice, 13 s
@@ -293,8 +445,15 @@ def _heal_corrupt_managed_components(project_dir: Path, build_dir: Path) -> bool
     return removed
 
 
-def _evict_cold_variants(target_dir: Path, keep: int) -> None:
-    """LRU-evict variant dirs (``v_*``) beyond ``keep``, coldest mtime first."""
+def _evict_cold_variants(target_dir: Path, keep: int, idf_target: str | None = None) -> None:
+    """LRU-evict variant dirs (``v_*``) beyond ``keep``, coldest mtime first.
+
+    Never evicts a variant whose lock is held: with two compiles of one target
+    running at once (different variants, or replicas of one), the coldest
+    sibling by mtime can be the one a long cold build is still writing into.
+    Its mtime is stamped at prepare time and again when its build finishes
+    (see _attempt), so a variant only looks cold once it has been idle.
+    """
     try:
         variants = [
             d for d in target_dir.iterdir()
@@ -304,10 +463,75 @@ def _evict_cold_variants(target_dir: Path, keep: int) -> None:
         return
     if len(variants) <= keep:
         return
+    target = idf_target or target_dir.name
+
+    def _busy(d: Path) -> bool:
+        key = _lock_key_for_variant_dir(target, d.name)
+        if key is None:
+            return False
+        with _VARIANT_LOCKS_GUARD:
+            lock = _VARIANT_LOCKS.get(key)
+        return bool(lock is not None and lock.locked())
+
     variants.sort(key=lambda d: d.stat().st_mtime if d.exists() else 0.0)
-    for d in variants[:len(variants) - keep]:
+    excess = len(variants) - keep
+    for d in variants:
+        if excess <= 0:
+            break
+        if _busy(d):
+            logger.info(f'[espidf] not evicting {d.name}: a compile holds its lock')
+            continue
         logger.info(f'[espidf] LRU-evicting cold build variant {d.name}')
         shutil.rmtree(d, ignore_errors=True)
+        excess -= 1
+
+
+def _ninja_parallelism_args() -> list[str]:
+    """`-j N` / `-l L` for ninja from VELXIO_NINJA_JOBS / VELXIO_NINJA_LOAD_LIMIT.
+
+    Unset (the OSS default) leaves ninja's own choice, nproc + 2. velxio.dev
+    runs two heavy slots on 6 vCPU, where two such ninjas plus the light lane
+    measured 34 runnable compiler threads at peak; the deployment caps them
+    in docker-compose.yml. `-l` throttles on the 1-minute load average, so a
+    build alone still gets the whole box.
+    """
+    args: list[str] = []
+    raw_jobs = os.environ.get('VELXIO_NINJA_JOBS', '').strip()
+    if raw_jobs:
+        try:
+            jobs = int(raw_jobs)
+            if jobs > 0:
+                args += ['-j', str(jobs)]
+        except ValueError:
+            logger.warning(f'[espidf] VELXIO_NINJA_JOBS={raw_jobs!r} is not an integer; ignored')
+    raw_load = os.environ.get('VELXIO_NINJA_LOAD_LIMIT', '').strip()
+    if raw_load:
+        try:
+            load = float(raw_load)
+            if load > 0:
+                args += ['-l', str(load)]
+        except ValueError:
+            logger.warning(f'[espidf] VELXIO_NINJA_LOAD_LIMIT={raw_load!r} is not a number; ignored')
+    return args
+
+
+_CONFIGURE_TROUBLE_MARKERS = (
+    'CMake Error',
+    'ninja: error',
+    'missing and no known rule to make it',
+    'error: loading \'build.ninja\'',
+)
+
+
+def _ninja_failure_wants_configure(result: _RunResult) -> bool:
+    """True when a failed ninja run on a warm dir looks like a configure
+    problem (cmake re-run failed, an input vanished, a manifest changed) rather
+    than a compiler error in the user's code. The fast path falls back to the
+    explicit configure exactly once on these."""
+    text = (result.stdout or '') + '\n' + (result.stderr or '')
+    if _corrupt_managed_component(text):
+        return True
+    return any(marker in text for marker in _CONFIGURE_TROUBLE_MARKERS)
 
 
 def _ninja_log_step_count(build_dir: 'str | Path') -> int:
@@ -462,9 +686,22 @@ def generate_ino_prototypes(source: str) -> str:
     return source[:first_pos] + block + source[first_pos:]
 
 
+# The toolchain-change wipe below removes EVERY variant of a target. It used
+# to be safe by construction (prepare ran on the event loop, so two compiles
+# could not interleave in it); now that prepare runs in a worker thread, two
+# first-after-restart compiles of one target must not both decide to wipe.
+_TARGET_SENTINEL_GUARD = threading.Lock()
+
+# Where prepare stashes the previous build's generated user_libs CMakeLists so
+# the merge can hand the regenerated file its old mtime when the bytes are
+# identical (it is a configure dependency; a fresh mtime re-runs cmake).
+_USERLIBS_CMAKE_STASH = '.velxio-userlibs-cmake.prev'
+
+
 def _prepare_persistent_project_dir(
     idf_target: str,
     variant_key: str = 'default',
+    replica: int = 0,
 ) -> Path:
     """Return a persistent project dir for (idf_target, variant_key), created
     from the template on first use and with the per-compile parts (main/,
@@ -485,13 +722,14 @@ def _prepare_persistent_project_dir(
 
     # Wipe ALL variants for this target if the toolchain changed (cached .o
     # files are no longer ABI-compatible).
-    sentinel = target_dir / '.idf_version'
-    current_signature = _idf_version_signature()
-    if sentinel.exists() and sentinel.read_text(encoding='utf-8').strip() != current_signature:
-        logger.info(f'[espidf] toolchain version changed; wiping {target_dir}')
-        shutil.rmtree(target_dir, ignore_errors=True)
-        target_dir.mkdir(parents=True, exist_ok=True)
-    sentinel.write_text(current_signature, encoding='utf-8')
+    with _TARGET_SENTINEL_GUARD:
+        sentinel = target_dir / '.idf_version'
+        current_signature = _idf_version_signature()
+        if sentinel.exists() and sentinel.read_text(encoding='utf-8').strip() != current_signature:
+            logger.info(f'[espidf] toolchain version changed; wiping {target_dir}')
+            shutil.rmtree(target_dir, ignore_errors=True)
+            target_dir.mkdir(parents=True, exist_ok=True)
+        sentinel.write_text(current_signature, encoding='utf-8')
 
     # One-time cleanup of the pre-variant layout (target_dir/project) so it
     # doesn't orphan ~240 MB after the upgrade to per-variant dirs.
@@ -500,8 +738,7 @@ def _prepare_persistent_project_dir(
         shutil.rmtree(legacy_project, ignore_errors=True)
         (target_dir / '.options_hash').unlink(missing_ok=True)
 
-    safe = ''.join(c for c in variant_key if c.isalnum() or c in '-_')[:40] or 'default'
-    variant_dir = target_dir / ('v_' + safe)
+    variant_dir = target_dir / _variant_dir_name(variant_key, replica)
     project_dir = variant_dir / 'project'
 
     if not project_dir.exists():
@@ -509,8 +746,17 @@ def _prepare_persistent_project_dir(
         shutil.copytree(_TEMPLATE_DIR, project_dir)
     else:
         # Reset per-compile parts only; keep build/ (warm for this variant).
+        # copytree preserves the template's mtimes, so main/CMakeLists.txt
+        # does NOT look new to ninja after this; the user's sources do, which
+        # is exactly what has to recompile.
         shutil.rmtree(project_dir / 'main', ignore_errors=True)
         shutil.copytree(_TEMPLATE_DIR / 'main', project_dir / 'main')
+        prev_cmake = project_dir / 'user_libs' / 'user_libs_all' / 'CMakeLists.txt'
+        stash = project_dir / _USERLIBS_CMAKE_STASH
+        if prev_cmake.is_file():
+            shutil.copy2(prev_cmake, stash)  # copy2 keeps the mtime
+        else:
+            stash.unlink(missing_ok=True)
         shutil.rmtree(project_dir / 'user_libs', ignore_errors=True)
 
     # Mark this variant most-recently-used, then LRU-evict the coldest.
@@ -518,7 +764,7 @@ def _prepare_persistent_project_dir(
         os.utime(variant_dir, None)
     except OSError:
         pass
-    _evict_cold_variants(target_dir, keep=_MAX_BUILD_VARIANTS)
+    _evict_cold_variants(target_dir, keep=_max_build_variants(idf_target), idf_target=idf_target)
 
     return project_dir
 
@@ -2503,7 +2749,22 @@ class ESPIDFCompiler:
             f'{defs_block}'
             f'{warns_block}'
         )
-        (comp_dir / 'CMakeLists.txt').write_text(cmake_content, encoding='utf-8')
+        cmake_path = comp_dir / 'CMakeLists.txt'
+        cmake_path.write_text(cmake_content, encoding='utf-8')
+        # The component's CMakeLists.txt is a configure dependency. The tree
+        # was wiped at prepare (a scan-all variant may resolve a different
+        # library set per sketch, so stale files must never survive), but the
+        # library files themselves come back through copy2 with their cache
+        # mtimes, and this file is the only one ninja would see as new. Give
+        # it back its previous mtime when the bytes did not change, so a warm
+        # variant with libraries skips the configure like a bare one does.
+        stash = comp_dir.parent.parent / _USERLIBS_CMAKE_STASH
+        try:
+            if stash.is_file() and stash.read_text(encoding='utf-8') == cmake_content:
+                st = stash.stat()
+                os.utime(cmake_path, (st.st_atime, st.st_mtime))
+        except OSError:
+            pass
         logger.info(
             f'[espidf] user_libs_all: {len(cpp_files)} source files, '
             f'{len(header_to_comp)} resolved headers'
@@ -4172,6 +4433,71 @@ class ESPIDFCompiler:
         )
         return merged_path
 
+    @staticmethod
+    def _pick_replica(idf_target: str, eff_hash: str) -> tuple[int, int | None]:
+        """(replica to build in, replica to warm in the background or None).
+
+        The first replica whose lock is free wins (0 first: it always exists).
+        When every existing copy is busy the compile queues on replica 0, and
+        after a short streak of such collisions (so a rare variant never gets
+        a second tree) the NEXT replica is created by a background build.
+        """
+        max_replicas = _variant_replicas()
+        target_dir = _BUILD_ROOT / idf_target
+        existing: list[int] = []
+        for n in range(max_replicas):
+            key = _variant_lock_key(idf_target, eff_hash, n)
+            if n == 0 or (
+                key not in _WARMING_REPLICAS
+                and (target_dir / _variant_dir_name(eff_hash, n)).is_dir()
+            ):
+                existing.append(n)
+        for n in existing:
+            if not _variant_lock(_variant_lock_key(idf_target, eff_hash, n)).locked():
+                return n, None
+        base_key = _variant_lock_key(idf_target, eff_hash)
+        nxt = len(existing)
+        warm = None
+        if (
+            nxt < max_replicas
+            and _variant_lock_key(idf_target, eff_hash, nxt) not in _WARMING_REPLICAS
+            and _note_variant_collision(base_key)
+        ):
+            warm = nxt
+        return 0, warm
+
+    def _warm_replica_in_background(
+        self, replica: int, idf_target: str, eff_hash: str,
+        files: list[dict], board_fqbn: str, **compile_kwargs,
+    ) -> None:
+        """Build replica `replica` of this variant from the same sources, off
+        to the side, at low CPU priority, so the next collision finds a warm
+        copy. Nothing waits on it; a failure only means no replica."""
+        key = _variant_lock_key(idf_target, eff_hash, replica)
+        if key in _WARMING_REPLICAS:
+            return
+        _WARMING_REPLICAS.add(key)
+        logger.info(f'[espidf] every replica of {idf_target}/{eff_hash} is busy; warming replica {replica} in the background')
+
+        async def _warm() -> None:
+            try:
+                result = await self.compile(
+                    files, board_fqbn, progress_callback=None,
+                    cpu_nice=10, _force_replica=replica, **compile_kwargs,
+                )
+                logger.info(
+                    f'[espidf] replica {replica} of {idf_target}/{eff_hash} warmed '
+                    f'(success={result.get("success")})'
+                )
+            except Exception:
+                logger.exception(f'[espidf] warming replica {replica} of {idf_target}/{eff_hash} failed')
+            finally:
+                _WARMING_REPLICAS.discard(key)
+
+        task = asyncio.create_task(_warm())
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+
     async def compile(
         self,
         files: list[dict],
@@ -4183,6 +4509,8 @@ class ESPIDFCompiler:
         owner_id: str | None = None,
         pure_idf: bool = False,
         custom_wifi_ssids: list[str] | None = None,
+        cpu_nice: int | None = None,
+        _force_replica: int | None = None,
     ) -> dict:
         """
         Compile Arduino sketch using ESP-IDF.
@@ -4359,18 +4687,57 @@ class ESPIDFCompiler:
                     # Prepare AND build under the variant lock: prepare wipes main/ and
                     # user_libs, and the configure populates managed_components/ - neither
                     # survives a second compile landing in the same dir mid-way.
-                    async with _variant_lock(f'{idf_target}/{eff_hash}'):
-                        project_dir = _prepare_persistent_project_dir(idf_target, eff_hash)
-                        logger.info(f'[espidf] Using persistent build dir: {project_dir}')
-                        return await self._compile_in_dir(
-                            project_dir, files, idf_target,
-                            progress_callback, normalized_opts, spiffs_files,
-                            allowed_libraries=allowed, libraries_dir=scope_dir,
-                            arduino_mode=arduino_mode, use_idf5=use_idf5,
-                            pure_idf=pure_idf, board_fqbn=board_fqbn,
-                            custom_wifi_ssids=custom_wifi_ssids,
-                            denied_libraries=denied, speculative_out=speculative,
+                    if _force_replica is not None:
+                        replica = _force_replica
+                    else:
+                        replica, warm = self._pick_replica(idf_target, eff_hash)
+                        if warm is not None:
+                            self._warm_replica_in_background(
+                                warm, idf_target, eff_hash, files, board_fqbn,
+                                board_options=board_options,
+                                allowed_libraries=allowed, owner_id=owner_id,
+                                pure_idf=pure_idf, custom_wifi_ssids=custom_wifi_ssids,
+                            )
+                    lock_key = _variant_lock_key(idf_target, eff_hash, replica)
+                    wait_t0 = time.monotonic()
+                    async with _variant_lock(lock_key):
+                        waited = time.monotonic() - wait_t0
+                        _timing_note(
+                            variant_wait_ms=int(waited * 1000),
+                            replica=replica,
+                            variant=f'{idf_target}/{eff_hash}',
                         )
+                        if waited > 0.5:
+                            logger.info(
+                                f'[espidf] waited {waited:.1f}s for build dir '
+                                f'{lock_key} (replica {replica})'
+                            )
+                        # Prepare does rmtree + copytree on a 100-500 MB tree
+                        # and the LRU eviction: off the event loop, or every
+                        # WebSocket frame on the box stalls behind it.
+                        project_dir = await asyncio.to_thread(
+                            _prepare_persistent_project_dir, idf_target, eff_hash, replica,
+                        )
+                        logger.info(f'[espidf] Using persistent build dir: {project_dir}')
+                        try:
+                            return await self._compile_in_dir(
+                                project_dir, files, idf_target,
+                                progress_callback, normalized_opts, spiffs_files,
+                                allowed_libraries=allowed, libraries_dir=scope_dir,
+                                arduino_mode=arduino_mode, use_idf5=use_idf5,
+                                pure_idf=pure_idf, board_fqbn=board_fqbn,
+                                custom_wifi_ssids=custom_wifi_ssids,
+                                denied_libraries=denied, speculative_out=speculative,
+                                cpu_nice=cpu_nice,
+                            )
+                        finally:
+                            # Re-stamp at the END of the build too: eviction
+                            # sorts by this, and a long build must not be the
+                            # coldest sibling because it started long ago.
+                            try:
+                                os.utime(project_dir.parent, None)
+                            except OSError:
+                                pass
                 with tempfile.TemporaryDirectory(prefix='espidf_') as temp_dir:
                     project_dir = Path(temp_dir) / 'project'
                     shutil.copytree(_TEMPLATE_DIR, project_dir)
@@ -4382,6 +4749,7 @@ class ESPIDFCompiler:
                         arduino_mode=arduino_mode, use_idf5=use_idf5,
                         pure_idf=pure_idf, board_fqbn=board_fqbn,
                         custom_wifi_ssids=custom_wifi_ssids,
+                        cpu_nice=cpu_nice,
                     )
             finally:
                 if scope_dir is not None:
@@ -4517,6 +4885,7 @@ class ESPIDFCompiler:
         custom_wifi_ssids: list[str] | None = None,
         denied_libraries: set[str] | None = None,
         speculative_out: set[str] | None = None,
+        cpu_nice: int | None = None,
     ) -> dict:
         """Inner compile body: writes sketch + libs into `project_dir`,
         runs cmake + ninja, merges binaries. Caller is responsible for
@@ -4561,7 +4930,13 @@ class ESPIDFCompiler:
         prev_defaults = (
             defaults_path.read_text(encoding='utf-8') if defaults_path.exists() else None
         )
-        defaults_path.write_text(rendered_sdkconfig, encoding='utf-8')
+        if prev_defaults != rendered_sdkconfig:
+            defaults_path.write_text(rendered_sdkconfig, encoding='utf-8')
+        # A defaults change drops the generated sdkconfig below, and a missing
+        # sdkconfig is a missing configure input: ninja refuses to regenerate
+        # ("needed by build.ninja, missing"), so that case must run cmake
+        # explicitly. First build of a variant has no build.ninja anyway.
+        force_configure = prev_defaults is not None and prev_defaults != rendered_sdkconfig
 
 
         # ESP-IDF only SEEDS sdkconfig from sdkconfig.defaults when sdkconfig is
@@ -4610,7 +4985,7 @@ class ESPIDFCompiler:
 
         # Generate partitions.csv per the selected scheme.
         partition_csv = self._render_partition_csv(board_options['partitionScheme'])
-        (project_dir / 'partitions.csv').write_text(partition_csv, encoding='utf-8')
+        _write_if_changed(project_dir / 'partitions.csv', partition_csv)
 
         # Get sketch content — Arduino tab semantics: EVERY .ino is part of
         # the sketch. The main file (literal sketch.ino, else the first .ino
@@ -4937,6 +5312,54 @@ class ESPIDFCompiler:
         build_dir = project_dir / 'build'
         build_dir.mkdir(exist_ok=True)
 
+        # The template's main/CMakeLists.txt globs main/*.c and *.cpp without
+        # CONFIGURE_DEPENDS (ESP-IDF evaluates component CMakeLists in script
+        # mode, where it is rejected), so cmake only re-globs on a configure.
+        # Record the set of compilable sources per build; when it differs from
+        # the last build's, bump main/CMakeLists.txt so ninja's RERUN_CMAKE
+        # rule re-runs cmake and the new (or removed) file reaches the graph.
+        main_dir = project_dir / 'main'
+        try:
+            source_set = '\n'.join(sorted(
+                p.name for p in main_dir.iterdir() if p.suffix in ('.c', '.cpp')
+            ))
+        except OSError:
+            source_set = ''
+        source_marker = project_dir / '.velxio-sources'
+        prev_source_set = (
+            source_marker.read_text(encoding='utf-8') if source_marker.exists() else None
+        )
+        if prev_source_set != source_set:
+            source_marker.write_text(source_set, encoding='utf-8')
+            if prev_source_set is not None:
+                try:
+                    os.utime(main_dir / 'CMakeLists.txt', None)
+                except OSError:
+                    pass
+                logger.info('[espidf] source set changed; cmake will re-glob main/')
+
+        # A warm build dir skips the explicit configure: ninja re-runs cmake by
+        # itself when any configure input changed (partitions.csv,
+        # velxio_board.cmake, sdkconfig, every CMakeLists.txt, the managed
+        # components' manifests). Measured 2026-09-04: the configure was 18 of
+        # the 25 s of a warm esp32 build under load, and ninja then ran ~10
+        # steps. VELXIO_ESPIDF_ALWAYS_CONFIGURE=1 restores the old behaviour.
+        configure_skipped = (
+            not _ALWAYS_CONFIGURE
+            and not force_configure
+            and (build_dir / 'build.ninja').is_file()
+            and (build_dir / 'CMakeCache.txt').is_file()
+        )
+        if (
+            configure_skipped and idf_target == 'esp32p4' and arduino_mode
+            and (project_dir / 'managed_components' / 'espressif__esp_hosted').is_dir()
+            and not (project_dir / 'components' / 'espressif__esp_hosted').is_dir()
+        ):
+            # The first configure fetched esp_hosted but the patched override
+            # was never adopted (an earlier attempt died in between): only the
+            # explicit path below creates and reconfigures it.
+            configure_skipped = False
+
         env = self._build_env(
             idf_target, use_idf5=use_idf5, arduino_mode=arduino_mode,
             pure_idf=pure_idf,
@@ -4966,8 +5389,6 @@ class ESPIDFCompiler:
         if os.environ.get('IDF_CCACHE_ENABLE', '1') not in ('0', 'false', 'False', ''):
             cmake_cmd.append('-DCCACHE_ENABLE=1')
 
-        logger.info(f'[espidf] cmake: {" ".join(cmake_cmd)}')
-
         # IDF 5.x configure does more work per cold run (component manager,
         # per-target tool checks) — give it more headroom than the 4.4 flow.
         cmake_timeout = 300 if use_idf5 else 120
@@ -4979,82 +5400,105 @@ class ESPIDFCompiler:
                 env=env,
                 timeout=cmake_timeout,
                 progress_callback=progress_callback,
+                nice=cpu_nice,
             )
 
-        try:
-            cmake_result = await asyncio.to_thread(_run_cmake)
-        except subprocess.TimeoutExpired:
-            logger.error(
-                f'[espidf] cmake configure timed out after {cmake_timeout}s '
-                f'in {build_dir}'
-            )
-            return {
-                'success': False,
-                'error': f'ESP-IDF cmake configure timed out ({cmake_timeout}s)',
-                'stdout': '',
-                'stderr': '',
-            }
+        cmake_result = _RunResult(returncode=0, stdout='', stderr='')
 
-        if cmake_result.returncode != 0:
-            # A managed component left half-copied by an interrupted or
-            # concurrent configure makes the component manager refuse the
-            # whole variant for good ("is corrupted"). The copy in its own
-            # cache is intact, so drop the variant's copies and configure
-            # once more instead of failing every compile of this variant
-            # until the dir is deleted by hand.
-            corrupt = _corrupt_managed_component(cmake_result.stderr)
-            if corrupt and _heal_corrupt_managed_components(project_dir, build_dir):
-                logger.warning(
-                    f'[espidf] managed component "{corrupt}" corrupted in '
-                    f'{project_dir}; dropped managed_components/ and reconfiguring'
+        async def _configure() -> dict | None:
+            """The explicit cmake configure. Returns an error result, or None."""
+            nonlocal cmake_result
+            logger.info(f'[espidf] cmake: {" ".join(cmake_cmd)}')
+            configure_t0 = time.monotonic()
+            try:
+                cmake_result = await asyncio.to_thread(_run_cmake)
+            except subprocess.TimeoutExpired:
+                logger.error(
+                    f'[espidf] cmake configure timed out after {cmake_timeout}s '
+                    f'in {build_dir}'
                 )
-                try:
-                    cmake_result = await asyncio.to_thread(_run_cmake)
-                except subprocess.TimeoutExpired:
-                    return {
-                        'success': False,
-                        'error': f'ESP-IDF cmake reconfigure timed out ({cmake_timeout}s)',
-                        'stdout': '',
-                        'stderr': '',
-                    }
-        if cmake_result.returncode != 0:
-            logger.error(f'[espidf] cmake failed:\n{cmake_result.stderr}')
-            return {
-                'success': False,
-                'error': 'ESP-IDF cmake configure failed',
-                'stdout': cmake_result.stdout,
-                'stderr': cmake_result.stderr,
-            }
+                return {
+                    'success': False,
+                    'error': f'ESP-IDF cmake configure timed out ({cmake_timeout}s)',
+                    'stdout': '',
+                    'stderr': '',
+                }
 
-        # The configure above fetched managed components; give esp32p4 its
-        # patched esp_hosted override, and reconfigure once when it appears
-        # so the build system adopts the components/ dir.
-        if idf_target == 'esp32p4' and arduino_mode:
-            if self._override_esp_hosted_with_race_fix(project_dir):
-                try:
-                    cmake_result = await asyncio.to_thread(_run_cmake)
-                except subprocess.TimeoutExpired:
-                    return {
-                        'success': False,
-                        'error': f'ESP-IDF cmake reconfigure timed out ({cmake_timeout}s)',
-                        'stdout': '',
-                        'stderr': '',
-                    }
-                if cmake_result.returncode != 0:
-                    logger.error(
-                        f'[espidf] reconfigure after esp_hosted override failed:\n'
-                        f'{cmake_result.stderr}'
+            if cmake_result.returncode != 0:
+                # A managed component left half-copied by an interrupted or
+                # concurrent configure makes the component manager refuse the
+                # whole variant for good ("is corrupted"). The copy in its own
+                # cache is intact, so drop the variant's copies and configure
+                # once more instead of failing every compile of this variant
+                # until the dir is deleted by hand.
+                corrupt = _corrupt_managed_component(cmake_result.stderr)
+                if corrupt and _heal_corrupt_managed_components(project_dir, build_dir):
+                    logger.warning(
+                        f'[espidf] managed component "{corrupt}" corrupted in '
+                        f'{project_dir}; dropped managed_components/ and reconfiguring'
                     )
-                    return {
-                        'success': False,
-                        'error': 'ESP-IDF reconfigure after esp_hosted override failed',
-                        'stdout': cmake_result.stdout,
-                        'stderr': cmake_result.stderr,
-                    }
+                    try:
+                        cmake_result = await asyncio.to_thread(_run_cmake)
+                    except subprocess.TimeoutExpired:
+                        return {
+                            'success': False,
+                            'error': f'ESP-IDF cmake reconfigure timed out ({cmake_timeout}s)',
+                            'stdout': '',
+                            'stderr': '',
+                        }
+            if cmake_result.returncode != 0:
+                logger.error(f'[espidf] cmake failed:\n{cmake_result.stderr}')
+                return {
+                    'success': False,
+                    'error': 'ESP-IDF cmake configure failed',
+                    'stdout': cmake_result.stdout,
+                    'stderr': cmake_result.stderr,
+                }
+
+            # The configure above fetched managed components; give esp32p4 its
+            # patched esp_hosted override, and reconfigure once when it appears
+            # so the build system adopts the components/ dir.
+            if idf_target == 'esp32p4' and arduino_mode:
+                if self._override_esp_hosted_with_race_fix(project_dir):
+                    try:
+                        cmake_result = await asyncio.to_thread(_run_cmake)
+                    except subprocess.TimeoutExpired:
+                        return {
+                            'success': False,
+                            'error': f'ESP-IDF cmake reconfigure timed out ({cmake_timeout}s)',
+                            'stdout': '',
+                            'stderr': '',
+                        }
+                    if cmake_result.returncode != 0:
+                        logger.error(
+                            f'[espidf] reconfigure after esp_hosted override failed:\n'
+                            f'{cmake_result.stderr}'
+                        )
+                        return {
+                            'success': False,
+                            'error': 'ESP-IDF reconfigure after esp_hosted override failed',
+                            'stdout': cmake_result.stdout,
+                            'stderr': cmake_result.stderr,
+                        }
+            _timing_note(configure_ms=int((time.monotonic() - configure_t0) * 1000))
+            return None
+
+        if configure_skipped:
+            logger.info('[espidf] warm build dir: skipping cmake configure')
+            if progress_callback is not None:
+                try:
+                    progress_callback('[velxio] build dir is warm; skipping cmake configure\n')
+                except Exception:
+                    pass
+        else:
+            configure_error = await _configure()
+            if configure_error is not None:
+                return configure_error
+        _timing_note(configure_skipped=configure_skipped)
 
         # Step 2: ninja build
-        ninja_cmd = ['ninja']
-        logger.info('[espidf] Building with ninja...')
+        ninja_cmd = ['ninja'] + _ninja_parallelism_args()
+        logger.info(f'[espidf] Building with {" ".join(ninja_cmd)}...')
 
         # Cold ESP-IDF builds with external Arduino libraries (e.g. Adafruit
         # BMP280 + BusIO + Unified Sensor → ~1480 build steps) regularly take
@@ -5070,10 +5514,30 @@ class ESPIDFCompiler:
                 env=env,
                 timeout=NINJA_TIMEOUT_S,
                 progress_callback=progress_callback,
+                nice=cpu_nice,
             )
 
+        ninja_t0 = time.monotonic()
         try:
             ninja_result = await asyncio.to_thread(_run_ninja)
+            if (
+                configure_skipped
+                and ninja_result.returncode != 0
+                and _ninja_failure_wants_configure(ninja_result)
+            ):
+                # The fast path trusted the warm dir and ninja's own cmake
+                # re-run could not cope (a deleted input, a corrupted managed
+                # component, a stale cache). Do what the slow path would have
+                # done from the start, once, then build again.
+                logger.warning(
+                    '[espidf] ninja could not regenerate the warm build dir; '
+                    'falling back to an explicit configure'
+                )
+                _timing_note(configure_fallback=True)
+                configure_error = await _configure()
+                if configure_error is not None:
+                    return configure_error
+                ninja_result = await asyncio.to_thread(_run_ninja)
         except subprocess.TimeoutExpired:
             # Silent before — a 600s failure left no server-side trace at all,
             # so a slow-box incident (2026-08-17: cold S3 variant, ccache
@@ -5097,6 +5561,7 @@ class ESPIDFCompiler:
                 'stderr': '',
             }
 
+        _timing_note(ninja_ms=int((time.monotonic() - ninja_t0) * 1000))
         all_stdout = cmake_result.stdout + '\n' + ninja_result.stdout
         all_stderr = cmake_result.stderr + '\n' + ninja_result.stderr
 

@@ -90,9 +90,12 @@ elseif(DEFINED ENV{ARDUINO_ESP32_PATH})
     # evaluates each component's CMakeLists in script mode where
     # CONFIGURE_DEPENDS isn't supported, and the build aborts with
     # "CONFIGURE_DEPENDS is invalid for script and find package modes".
-    # We don't need it anyway: espidf_compiler wipes + restores main/
-    # from the template on every compile (touching CMakeLists.txt's
-    # mtime), so cmake re-globs naturally on the next configure run.
+    # The glob is only re-evaluated by a cmake configure, and a warm build
+    # dir goes straight to ninja. espidf_compiler therefore records the set
+    # of compilable files per build (.velxio-sources) and bumps this file's
+    # mtime when the set changes, which makes ninja's RERUN_CMAKE rule run
+    # cmake again. (Restoring main/ from the template does NOT bump it:
+    # copytree preserves the template's mtimes.)
     file(GLOB _user_srcs
         "${CMAKE_CURRENT_LIST_DIR}/*.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/*.c")
