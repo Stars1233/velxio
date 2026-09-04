@@ -20,6 +20,7 @@ from app.core.hooks import (
     record_compile,
 )
 from app.services import build_queue
+from app.services import espidf_compiler as espidf_compiler_module
 from app.services.arduino_cli import ArduinoCLIService
 from app.services.espidf_compiler import espidf_compiler
 
@@ -50,8 +51,35 @@ JOB_TTL_S = 1800  # purge results 30 min after completion
 ARTIFACT_CACHE_DIR = Path(
     os.environ.get("VELXIO_ARTIFACT_CACHE", "/var/lib/velxio-build/artifacts")
 )
-ARTIFACT_CACHE_MAX_ENTRIES = 400
+
+
+def _env_int(name: str, default: int, lo: int, hi: int) -> int:
+    try:
+        value = int(os.environ.get(name, "").strip() or default)
+    except ValueError:
+        logger.warning("[compile] %s is not an integer; using %d", name, default)
+        return default
+    return max(lo, min(hi, value))
+
+
+# Entries are bimodal — a 2 KB AVR hex or a 5 MB merged ESP32 flash image —
+# so the cache is capped both by count and by bytes. 400 entries turned over
+# in under five hours of velxio.dev traffic; the deployment raises it (see
+# docker-compose.yml). 0 bytes = no byte cap.
+ARTIFACT_CACHE_MAX_ENTRIES = _env_int("VELXIO_ARTIFACT_CACHE_MAX_ENTRIES", 400, 10, 100_000)
+ARTIFACT_CACHE_MAX_BYTES = _env_int("VELXIO_ARTIFACT_CACHE_MAX_BYTES", 0, 0, 1 << 40)
 ARTIFACT_CACHE_MAX_AGE_S = 14 * 24 * 3600
+# A store walks the whole directory to prune; with thousands of entries that
+# is ~100 ms of stat calls, so it runs off the event loop and only every so
+# many stores. The cap is therefore soft by up to this many entries.
+_ARTIFACT_PRUNE_EVERY = 25
+_artifact_stores_since_prune = 0
+
+# A request carrying this header with the deployment's token skips the
+# artifact cache LOOKUP (the result is still stored). It exists for the
+# nightly example smoke, which must exercise the compiler rather than read
+# yesterday's binaries back. Unset (the OSS default) = the header is ignored.
+_CACHE_BYPASS_TOKEN = os.environ.get("VELXIO_CACHE_BYPASS_TOKEN", "").strip()
 
 
 def _toolchain_epoch() -> str:
@@ -96,9 +124,14 @@ def _artifact_load(key: str) -> dict | None:
         return None
 
 
-def _artifact_store(key: str, result: dict) -> None:
+def _artifact_store_sync(key: str, result: dict) -> None:
     """Persist a SUCCESSFUL build. Failures are never cached — a compile error
-    is usually the user's half-written code, and they will edit and retry."""
+    is usually the user's half-written code, and they will edit and retry.
+
+    Blocking: json.dumps of a 5 MB image plus the write plus (every so many
+    stores) the prune walk. Call through `_artifact_store` from the loop.
+    """
+    global _artifact_stores_since_prune
     if not result.get("success"):
         return
     try:
@@ -110,19 +143,39 @@ def _artifact_store(key: str, result: dict) -> None:
         tmp = _artifact_path(key).with_suffix(".tmp")
         tmp.write_text(json.dumps(slim))
         tmp.replace(_artifact_path(key))
-        _artifact_prune()
+        _artifact_stores_since_prune += 1
+        if _artifact_stores_since_prune >= _ARTIFACT_PRUNE_EVERY:
+            _artifact_stores_since_prune = 0
+            _artifact_prune()
     except Exception:
         logger.warning("[compile] artifact cache write failed", exc_info=True)
 
 
+async def _artifact_store(key: str, result: dict) -> None:
+    await asyncio.to_thread(_artifact_store_sync, key, result)
+
+
 def _artifact_prune() -> None:
-    """Keep the newest ARTIFACT_CACHE_MAX_ENTRIES files (LRU by mtime)."""
+    """Keep the newest ARTIFACT_CACHE_MAX_ENTRIES files (LRU by mtime), and
+    within ARTIFACT_CACHE_MAX_BYTES when a byte cap is set."""
     try:
-        files = sorted(
-            ARTIFACT_CACHE_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
-        )
-        for stale in files[ARTIFACT_CACHE_MAX_ENTRIES:]:
-            stale.unlink(missing_ok=True)
+        entries = []
+        with os.scandir(ARTIFACT_CACHE_DIR) as it:
+            for entry in it:
+                if entry.name.endswith(".json") and entry.is_file():
+                    st = entry.stat()
+                    entries.append((st.st_mtime, st.st_size, entry.path))
+        entries.sort(reverse=True)  # newest first
+        total = 0
+        for idx, (_mtime, size, path) in enumerate(entries):
+            total += size
+            over_count = idx >= ARTIFACT_CACHE_MAX_ENTRIES
+            over_bytes = ARTIFACT_CACHE_MAX_BYTES > 0 and total > ARTIFACT_CACHE_MAX_BYTES
+            if over_count or over_bytes:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
     except Exception:
         pass
 
@@ -133,15 +186,21 @@ def _artifact_prune() -> None:
 # RP2040, STM32...): seconds each, so they get their own slots and never queue
 # behind an ESP-IDF cold build. Before the split a single Semaphore(2) gated
 # both, and a Uno blink could sit "compiling" for minutes while two ESP32 builds
-# ran. Concurrent compiles to the SAME ESP-IDF target would corrupt the
-# persistent build dir, so those are serialized with a per-target lock layered
-# on top.
+# ran.
 #
 # BuildQueue replaced the two semaphores when velxio.dev started queueing for
 # real: a semaphore is FIFO and anonymous, so a paid build could not get past a
 # wall of gallery clicks and the route had nothing to tell the waiting user. The
 # queue is unbounded on purpose — a build is never refused, only delayed.
-_TARGET_LOCKS: dict[str, asyncio.Lock] = {}
+#
+# There is NO per-target lock here any more. There used to be one, taken
+# INSIDE the lane slot, keyed on (idf_target, arduino variant): with 78% of
+# heavy builds on esp32:esp32:esp32 the second heavy slot spent whole hours
+# holding a slot while blocked on it (2026-09-02 12:00: one slot 3647 s of
+# build, the other 943 s, queue p50 43 min). The shared resource is the
+# persistent build DIRECTORY, and espidf_compiler serialises on exactly that
+# (`_variant_lock`, one per variant or replica); arduino-cli builds in a fresh
+# temp dir per call and never needed a lock.
 
 
 def _is_heavy_compile(board_fqbn: str) -> bool:
@@ -152,9 +211,11 @@ def _is_heavy_compile(board_fqbn: str) -> bool:
 def _build_identity(board_fqbn: str) -> str:
     """The identity of the persistent BUILD DIRECTORY this FQBN compiles in.
 
-    The lock below has to be keyed on the shared resource, and that resource is
-    the build dir — which `_prepare_persistent_project_dir` keys on
-    (idf_target, variant), NOT on the FQBN. Several FQBNs map to one variant:
+    Used to key the per-target duration estimate (`_estimate_key`). It was
+    also the key of a route-level build lock until 2026-09; the compiler now
+    serialises on its own per-variant locks. The identity is still the build
+    dir's, which `_prepare_persistent_project_dir` keys on (idf_target,
+    variant), NOT on the FQBN. Several FQBNs map to one variant:
     arduino-esp32's boards.txt gives both `esp32` and `esp32cam`
     `build.variant=esp32`, so they land in the SAME directory.
 
@@ -183,18 +244,6 @@ def _build_identity(board_fqbn: str) -> str:
         return f"{target}::{variant}"
     except Exception:  # noqa: BLE001 - identity is best-effort; FQBN is a safe fallback
         return board_fqbn
-
-
-def _target_lock(board_fqbn: str) -> asyncio.Lock:
-    """Lazy-initialised lock so concurrent compiles that SHARE A BUILD DIR
-    serialise. Boards with genuinely different build dirs still run in
-    parallel up to the semaphore cap."""
-    key = _build_identity(board_fqbn)
-    lock = _TARGET_LOCKS.get(key)
-    if lock is None:
-        lock = asyncio.Lock()
-        _TARGET_LOCKS[key] = lock
-    return lock
 
 
 # ── Progress + duration estimation ───────────────────────────────────────────
@@ -332,22 +381,32 @@ def _job_display_fields(job_id: str) -> dict[str, Any]:
     }
 
 
-async def _resolve_queue_priority(user_id: str | None) -> tuple[int, str]:
-    """(priority, display tier) for a compile. OSS default: everyone equal.
+async def _resolve_queue_priority(user_id: str | None) -> tuple[int, str, int | None]:
+    """(priority, display tier, cpu_nice) for a compile. OSS default: everyone equal.
 
     The tier string only ever reaches the client as a label ('pro' shows a
     priority badge, 'free' shows the upgrade line). 'local' means no plan
     vocabulary applies — a self-hosted OSS build — and the UI shows neither.
+
+    `cpu_nice` is the nice level for this build's compiler processes (None =
+    inherit). It only ranks CPU time between builds that are ALREADY running;
+    nobody is stopped or refused. Without an overlay every build inherits.
     """
     info = await compile_priority(user_id)
     if not isinstance(info, dict):
-        return build_queue.PRIORITY_STANDARD, "local"
+        return build_queue.PRIORITY_STANDARD, "local", None
     try:
         priority = int(info.get("priority", build_queue.PRIORITY_STANDARD))
     except (TypeError, ValueError):
         priority = build_queue.PRIORITY_STANDARD
     tier = str(info.get("tier") or "standard")
-    return priority, tier
+    cpu_nice: int | None
+    try:
+        raw_nice = info.get("cpu_nice")
+        cpu_nice = None if raw_nice is None else max(0, min(19, int(raw_nice)))
+    except (TypeError, ValueError):
+        cpu_nice = None
+    return priority, tier, cpu_nice
 
 
 def _job_key(
@@ -619,6 +678,7 @@ async def _run_compile(
     progress_callback: Any = None,
     requester_id: str | None = None,
     scope: tuple[set[str] | None, str | None] | None = None,
+    cpu_nice: int | None = None,
 ) -> CompileResponse:
     """Do the actual compile (ESP-IDF for esp32:*, arduino-cli otherwise).
 
@@ -663,6 +723,7 @@ async def _run_compile(
             [f.model_dump() for f in request.spiffs_files]
             if request.spiffs_files else None
         )
+        espidf_compiler_module.build_timing.set({})
         result = await espidf_compiler.compile(
             files, request.board_fqbn,
             progress_callback=progress_callback,
@@ -672,6 +733,7 @@ async def _run_compile(
             owner_id=owner_id,
             pure_idf=pure_idf,
             custom_wifi_ssids=request.custom_wifi_ssids,
+            cpu_nice=cpu_nice,
         )
         return CompileResponse(
             success=result["success"],
@@ -759,9 +821,10 @@ async def _compile_job(
     user_id: str | None,
     scope: tuple[set[str] | None, str | None] | None = None,
     priority: int = build_queue.PRIORITY_STANDARD,
+    cpu_nice: int | None = None,
 ) -> None:
-    """Background worker: acquire a build slot + per-target lock, run the
-    compile, store result in COMPILE_JOBS.
+    """Background worker: acquire a build slot, run the compile (which takes
+    its own build-dir lock), store result in COMPILE_JOBS.
 
     `scope` is the (allowed_libraries, owner_id) already resolved by
     compile_start for the dedup key — threaded through so the build uses the
@@ -822,28 +885,31 @@ async def _compile_job(
             "automatically, and is never dropped.\n"
         )
 
+    slot_acquired = started
+    compiler_timing: dict[str, Any] = {}
     try:
         async with lane.slot(priority=priority, key=job_id, on_queued=on_queued):
-            async with _target_lock(request.board_fqbn):
-                # Job may have been purged or replaced while we were queued.
-                # Re-fetch and bail out if so.
-                if COMPILE_JOBS.get(job_id) is None:
-                    logger.info(f"[compile] job {job_id} purged before run; skipping")
-                    return
-                COMPILE_JOBS[job_id]["state"] = "running"
-                COMPILE_JOBS[job_id]["stage"] = "preparing"
-                # Progress and ETA are measured from HERE, not from the moment
-                # the job was queued — otherwise every build that waited would
-                # render as already half-finished the instant it starts.
-                COMPILE_JOBS[job_id]["run_started_at"] = time.time()
-                COMPILE_JOBS[job_id]["estimate_s"] = _estimated_seconds(
-                    lane_name, request.board_fqbn
-                )
-                build_started = time.monotonic()
-                response = await _run_compile(
-                    request, files, progress_callback=on_progress_line,
-                    requester_id=user_id, scope=scope,
-                )
+            slot_acquired = time.monotonic()
+            # Job may have been purged or replaced while we were queued.
+            # Re-fetch and bail out if so.
+            if COMPILE_JOBS.get(job_id) is None:
+                logger.info(f"[compile] job {job_id} purged before run; skipping")
+                return
+            COMPILE_JOBS[job_id]["state"] = "running"
+            COMPILE_JOBS[job_id]["stage"] = "preparing"
+            # Progress and ETA are measured from HERE, not from the moment
+            # the job was queued — otherwise every build that waited would
+            # render as already half-finished the instant it starts.
+            COMPILE_JOBS[job_id]["run_started_at"] = time.time()
+            COMPILE_JOBS[job_id]["estimate_s"] = _estimated_seconds(
+                lane_name, request.board_fqbn
+            )
+            build_started = time.monotonic()
+            response = await _run_compile(
+                request, files, progress_callback=on_progress_line,
+                requester_id=user_id, scope=scope, cpu_nice=cpu_nice,
+            )
+            compiler_timing = dict(espidf_compiler_module.build_timing.get() or {})
         if response.success:
             _record_duration(
                 lane_name, request.board_fqbn, time.monotonic() - build_started
@@ -862,7 +928,7 @@ async def _compile_job(
             "stdout_buffer": COMPILE_JOBS.get(job_id, {}).get("stdout_buffer", ""),
         }
         if job_key:
-            _artifact_store(job_key, response.model_dump())
+            await _artifact_store(job_key, response.model_dump())
         error_kind = (
             None if response.success
             else _classify_compile_error(response.stderr, response.error)
@@ -888,8 +954,19 @@ async def _compile_job(
                 # tells the operator whether a slow week means slow builds or a
                 # deep queue — i.e. whether to buy CPU or raise the lane caps.
                 "queue_ms": int((build_started - started) * 1000),
+                # queue_ms used to bundle the wait for a build slot with the
+                # wait for the build DIRECTORY (the old per-target lock). They
+                # answer different questions: slot_ms says the lane is full,
+                # variant_wait_ms says one variant is hot. Kept separate.
+                "slot_ms": int((slot_acquired - started) * 1000),
+                "variant_wait_ms": compiler_timing.get("variant_wait_ms"),
+                "configure_skipped": compiler_timing.get("configure_skipped"),
+                "configure_ms": compiler_timing.get("configure_ms"),
+                "ninja_ms": compiler_timing.get("ninja_ms"),
+                "replica": compiler_timing.get("replica"),
                 "lane": lane_name,
                 "priority": priority,
+                "cpu_nice": cpu_nice,
             },
         )
     except Exception as exc:
@@ -935,19 +1012,18 @@ async def compile_sketch(
     files = _resolve_files(request)
     started = time.monotonic()
 
-    priority, _tier = await _resolve_queue_priority(user_id)
+    priority, _tier, cpu_nice = await _resolve_queue_priority(user_id)
     lane = build_queue.lane_for(_is_heavy_compile(request.board_fqbn))
 
     async def _gated_compile() -> CompileResponse:
-        # This path used to call _run_compile directly — no build slot and, far
-        # worse, no per-target lock, so a sync compile could run inside the
-        # same persistent ESP-IDF build dir as an async one and hand back the
-        # other sketch's firmware (the failure _build_identity documents). It
-        # also meant an API caller bypassed the queue entirely while everyone
-        # in the editor waited.
+        # This path used to call _run_compile directly with no build slot, so
+        # an API caller bypassed the queue entirely while everyone in the
+        # editor waited. The build dir itself is protected inside the
+        # compiler (per-variant lock), the same as for the async path.
         async with lane.slot(priority=priority):
-            async with _target_lock(request.board_fqbn):
-                return await _run_compile(request, files, requester_id=user_id)
+            return await _run_compile(
+                request, files, requester_id=user_id, cpu_nice=cpu_nice,
+            )
 
     try:
         # Shielded: when the client (or a proxy timeout - nginx 504s a cold
@@ -1055,6 +1131,7 @@ class CompileStatusResponse(BaseModel):
 @router.post("/start", response_model=CompileStartResponse)
 async def compile_start(
     request: CompileRequest,
+    http_request: Request,
     user_id: str | None = Depends(get_current_user_id),
 ):
     """
@@ -1087,7 +1164,7 @@ async def compile_start(
     # Where this build sits in the queue. Resolved once, here, so a single
     # plan lookup covers the whole job and the tier the UI displays is the
     # same one the queue actually ordered on.
-    priority, tier = await _resolve_queue_priority(user_id)
+    priority, tier, cpu_nice = await _resolve_queue_priority(user_id)
     heavy = _is_heavy_compile(request.board_fqbn)
     queue_fields = {
         "tier": tier,
@@ -1130,7 +1207,11 @@ async def compile_start(
 
     # Same sources, same flags, already built: hand the stored artifact back as
     # an already-finished job so the client's normal poll loop just sees `done`.
-    cached = _artifact_load(key)
+    bypass_cache = bool(
+        _CACHE_BYPASS_TOKEN
+        and http_request.headers.get("x-velxio-cache-bypass", "") == _CACHE_BYPASS_TOKEN
+    )
+    cached = None if bypass_cache else _artifact_load(key)
     if cached is not None:
         job_id = uuid.uuid4().hex
         now = time.time()
@@ -1185,6 +1266,7 @@ async def compile_start(
             user_id=user_id,
             scope=(allowed_libraries, owner_id),
             priority=priority,
+            cpu_nice=cpu_nice,
         ),
     )
     return CompileStartResponse(job_id=job_id)

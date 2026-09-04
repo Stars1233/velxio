@@ -2,6 +2,7 @@ import subprocess
 import tempfile
 import asyncio
 import base64
+import hashlib
 import shutil
 import re
 import os
@@ -135,6 +136,28 @@ def humanize_cli_error(raw: str | None, *, action: str = "run arduino-cli") -> s
         return f"Could not {action}: arduino-cli returned no output."
     first = next((ln.strip() for ln in text.splitlines() if ln.strip()), text)
     return f"Could not {action}: {first[:300]}"
+
+
+def _discard_sketch_build_cache(sketch_dir: Path) -> None:
+    """Remove the per-sketch build cache arduino-cli left for this compile.
+
+    arduino-cli keys its sketch build cache on the MD5 of the sketch's
+    absolute path, and this service compiles every request in a fresh temp
+    dir: the entry is never reused, and arduino-cli 1.5.x never purges it
+    either (its purge scans /tmp/arduino, not the real cache dir). Measured
+    on velxio.dev: 17,000 directories and 15 GB in 15 days, growing 1 GB a
+    day. The core cache next to it (`cores/`, keyed on the FQBN) is what makes
+    warm builds fast and is left alone.
+    """
+    try:
+        cache_root = Path.home() / '.cache' / 'arduino' / 'sketches'
+        # MD5 because that is arduino-cli's own cache key (not a security use).
+        digest = hashlib.md5(str(sketch_dir).encode('utf-8'), usedforsecurity=False).hexdigest().upper()
+        target = cache_root / digest
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+    except Exception:
+        pass
 
 
 class ArduinoCLIService:
@@ -551,6 +574,7 @@ class ArduinoCLIService:
                     )
 
                 result = await asyncio.to_thread(run_compile)
+                _discard_sketch_build_cache(sketch_dir)
 
                 print(f"Process return code: {result.returncode}")
                 print(f"Stdout: {result.stdout}")

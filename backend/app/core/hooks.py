@@ -374,9 +374,12 @@ async def dispatch_gateway_proxy(
 # `app.services.build_queue` (PRIORITY_HIGH / MEDIUM / STANDARD) so paid builds
 # are admitted first.
 #
-# Returns {'priority': int, 'tier': str} or None. `tier` is a DISPLAY label the
-# compile-status endpoint echoes back so the frontend can say "priority build"
-# vs. offer an upgrade — it is not used for any access decision. Never return
+# Returns {'priority': int, 'tier': str, 'cpu_nice': int | None} or None.
+# `tier` is a DISPLAY label the compile-status endpoint echoes back so the
+# frontend can say "priority build" vs. offer an upgrade — it is not used for
+# any access decision. `cpu_nice` (optional) is the nice level for the build's
+# compiler processes: it ranks CPU time between builds that are already
+# running and never stops or refuses one; None/absent = inherit. Never return
 # queue depth or position from here: those stay server-side (see build_queue).
 
 CompilePriorityHook = Callable[[Optional[str]], Awaitable[Optional[dict]]]

@@ -297,3 +297,146 @@ class LoadLevelTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class PriorityBurstTests(unittest.IsolatedAsyncioTestCase):
+    """`priority_burst`: a paid build starts at once on a full lane.
+
+    Ordering alone cannot do that — a full lane has nothing to hand over
+    until a build finishes. The burst lets a priority job run ABOVE capacity,
+    bounded, and never a standard one. Off (0) unless the deployment asks.
+    """
+
+    async def test_priority_job_starts_immediately_on_a_full_lane(self) -> None:
+        queue = BuildQueue('test', capacity=2, priority_burst=1)
+        admitted: list[str] = []
+        gate = asyncio.Event()
+
+        async def standard(idx: int) -> None:
+            async with queue.slot(priority=PRIORITY_STANDARD):
+                admitted.append(f'free-{idx}')
+                await gate.wait()
+
+        async def paid() -> None:
+            async with queue.slot(priority=PRIORITY_HIGH):
+                admitted.append('pro')
+                await gate.wait()
+
+        frees = [asyncio.create_task(standard(i)) for i in range(5)]
+        await asyncio.sleep(0)  # two run, three wait
+        pro = asyncio.create_task(paid())
+        await asyncio.sleep(0)
+
+        self.assertEqual(admitted, ['free-0', 'free-1', 'pro'])
+        self.assertEqual(queue.active, 3)
+        self.assertEqual(queue.burst_active, 1)
+
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(pro, *frees), timeout=2)
+        self.assertEqual(queue.active, 0)
+        self.assertEqual(len(admitted), 6)
+
+    async def test_standard_jobs_never_use_the_burst(self) -> None:
+        queue = BuildQueue('test', capacity=1, priority_burst=2)
+        admitted: list[str] = []
+        gate = asyncio.Event()
+
+        async def standard(idx: int) -> None:
+            async with queue.slot(priority=PRIORITY_STANDARD):
+                admitted.append(f'free-{idx}')
+                await gate.wait()
+
+        tasks = [asyncio.create_task(standard(i)) for i in range(4)]
+        await asyncio.sleep(0)
+        self.assertEqual(admitted, ['free-0'])
+        self.assertEqual(queue.burst_active, 0)
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(*tasks), timeout=2)
+
+    async def test_the_burst_is_bounded(self) -> None:
+        queue = BuildQueue('test', capacity=1, priority_burst=1)
+        admitted: list[str] = []
+        gate = asyncio.Event()
+
+        async def job(label: str, priority: int) -> None:
+            async with queue.slot(priority=priority):
+                admitted.append(label)
+                await gate.wait()
+
+        free = asyncio.create_task(job('free', PRIORITY_STANDARD))
+        await asyncio.sleep(0)
+        pros = [asyncio.create_task(job(f'pro-{i}', PRIORITY_HIGH)) for i in range(3)]
+        await asyncio.sleep(0)
+        # One burst admission, the other two priority jobs wait for a slot.
+        self.assertEqual(admitted, ['free', 'pro-0'])
+        self.assertEqual(queue.waiting, 2)
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(free, *pros), timeout=2)
+        self.assertEqual(len(admitted), 4)
+
+    async def test_reserved_standard_slot_survives_the_burst(self) -> None:
+        """A free build still advances under a flood of paid ones with burst on."""
+        queue = BuildQueue('test', capacity=2, priority_burst=1)
+        admitted: list[str] = []
+        gate = asyncio.Event()
+
+        async def paid(idx: int) -> None:
+            async with queue.slot(priority=PRIORITY_HIGH):
+                admitted.append(f'pro-{idx}')
+                await gate.wait()
+
+        async def standard() -> None:
+            async with queue.slot(priority=PRIORITY_STANDARD):
+                admitted.append('free')
+
+        pros = [asyncio.create_task(paid(i)) for i in range(12)]
+        await asyncio.sleep(0)  # 2 regular + 1 burst run, nine wait
+        free = asyncio.create_task(standard())
+        await asyncio.sleep(0)
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(free, *pros), timeout=2)
+        self.assertLessEqual(
+            admitted.index('free'), 4,
+            f'free build waited behind too many paid builds: {admitted}',
+        )
+
+    async def test_a_lifted_job_takes_the_burst(self) -> None:
+        """Dedup lifts a queued standard job to paid; it must burst in at once."""
+        queue = BuildQueue('test', capacity=1, priority_burst=1)
+        admitted: list[str] = []
+        gate = asyncio.Event()
+
+        async def job(label: str, priority: int, key: str | None = None) -> None:
+            async with queue.slot(priority=priority, key=key):
+                admitted.append(label)
+                await gate.wait()
+
+        blocker = asyncio.create_task(job('free-0', PRIORITY_STANDARD))
+        await asyncio.sleep(0)
+        shared = asyncio.create_task(job('shared', PRIORITY_STANDARD, key='shared'))
+        await asyncio.sleep(0)
+        self.assertEqual(admitted, ['free-0'])
+        self.assertTrue(queue.reprioritize('shared', PRIORITY_HIGH))
+        await asyncio.sleep(0)
+        self.assertEqual(admitted, ['free-0', 'shared'])
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(blocker, shared), timeout=2)
+
+    async def test_burst_off_by_default(self) -> None:
+        queue = BuildQueue('test', capacity=1)
+        self.assertEqual(queue.priority_burst, 0)
+        gate = asyncio.Event()
+        admitted: list[str] = []
+
+        async def job(label: str, priority: int) -> None:
+            async with queue.slot(priority=priority):
+                admitted.append(label)
+                await gate.wait()
+
+        free = asyncio.create_task(job('free', PRIORITY_STANDARD))
+        await asyncio.sleep(0)
+        pro = asyncio.create_task(job('pro', PRIORITY_HIGH))
+        await asyncio.sleep(0)
+        self.assertEqual(admitted, ['free'])
+        gate.set()
+        await asyncio.wait_for(asyncio.gather(free, pro), timeout=2)
