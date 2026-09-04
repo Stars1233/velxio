@@ -23,6 +23,8 @@
  */
 
 import { listen } from './tauriBridge';
+import { describeError } from './describeError';
+import { MANUAL_CHECK_EVENT } from './UpdateAvailableToast';
 import { dlog } from './log';
 import { triggerDownloadVlx, importVlxFile } from '../utils/vlxFile';
 import { useSimulatorStore } from '../store/useSimulatorStore';
@@ -55,27 +57,6 @@ interface MenuEventPayload {
   route?: string;
 }
 
-/**
- * Best-effort human-readable reason out of an unknown throw.
- *
- * `(err as Error).message` is a lie when the thrower isn't an Error —
- * and tauri-plugin-updater rejects with a plain string ("Network
- * Error: ... status: 401"). The cast compiles, `.message` evaluates to
- * undefined, and the dialog reads "Update check failed: undefined",
- * which hid a real 401 for several releases.
- */
-function describeError(err: unknown): string {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === 'string' && err) return err;
-  try {
-    const json = JSON.stringify(err);
-    if (json && json !== '{}' && json !== 'null') return json;
-  } catch {
-    // Circular or non-serialisable — String() below still says something.
-  }
-  return String(err);
-}
-
 let installed = false;
 
 export async function installDesktopMenuListener(): Promise<void> {
@@ -106,7 +87,7 @@ async function handle(action: MenuAction, payload?: MenuEventPayload): Promise<v
       window.dispatchEvent(new CustomEvent(`velxio:menu:${action}`));
       return;
     case 'check-for-updates':
-      await checkForUpdates();
+      checkForUpdates();
       return;
     case 'set-locale':
       if (payload?.locale) setLocale(payload.locale);
@@ -263,23 +244,15 @@ function newProject(): void {
   }
 }
 
-async function checkForUpdates(): Promise<void> {
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const updater = (window as any).__TAURI__?.updater;
-    if (!updater?.check) {
-      showMessageDialog('Update plugin not available in this build.');
-      return;
-    }
-    const update = await updater.check();
-    if (update) {
-      await update.downloadAndInstall();
-    } else {
-      showMessageDialog('Velxio Desktop is up to date.', { kind: 'success' });
-    }
-  } catch (err) {
-    showMessageDialog(`Update check failed: ${describeError(err)}`, {
-      kind: 'error',
-    });
-  }
+/**
+ * Hand the request to <UpdateAvailableToast>, which owns the update UI:
+ * it asks before downloading, shows progress, and reports failures.
+ *
+ * This used to run its own check and call `downloadAndInstall()` straight
+ * away — ~100 MB fetched and the app relaunched with no prompt and no
+ * progress, while the automatic check politely asked first. Two code
+ * paths, two behaviours; now there is one.
+ */
+function checkForUpdates(): void {
+  window.dispatchEvent(new Event(MANUAL_CHECK_EVENT));
 }

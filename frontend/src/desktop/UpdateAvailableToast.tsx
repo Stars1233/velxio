@@ -12,9 +12,13 @@
  * were typing) but is visible enough that the update doesn't get
  * forgotten.
  *
- * Auto-check fires once on mount with a 30 s delay so it doesn't
- * compete with sidecar startup and the first paint. Manual re-check
- * still works via the Velxio menu's "Check for Updates..." item.
+ * Auto-check fires once on mount with a 60 s delay so it doesn't
+ * compete with sidecar startup and the first paint.
+ *
+ * The Velxio menu's "Check for Updates..." item routes here too, via
+ * MANUAL_CHECK_EVENT — it used to run its own check and install without
+ * asking. One component owns the flow: ask, show progress, report
+ * failures.
  *
  * State machine:
  *   idle          → no update detected, render nothing
@@ -32,10 +36,20 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { isTauri } from './tauriBridge';
+import { showMessageDialog } from '../store/useMessageDialogStore';
+import { describeError } from './describeError';
 import { dlog } from './log';
 
 const DISMISS_KEY = 'vlx-desktop-update-dismissed';
-const AUTO_CHECK_DELAY_MS = 30_000;
+const AUTO_CHECK_DELAY_MS = 60_000;
+
+/**
+ * Dispatched by the "Check for Updates" menu item so this component owns
+ * the whole update flow. The menu used to call `downloadAndInstall()`
+ * itself, which pulled ~100 MB and relaunched the app with no prompt and
+ * no progress bar — the opposite of what the automatic check does.
+ */
+export const MANUAL_CHECK_EVENT = 'velxio://check-updates';
 
 type State =
   | { kind: 'idle' }
@@ -84,6 +98,44 @@ export const UpdateAvailableToast = () => {
   const [state, setState] = useState<State>({ kind: 'idle' });
   const checked = useRef(false);
 
+  // One check routine for both entry points. `manual` only changes how
+  // the two quiet outcomes are reported: a background check stays silent
+  // (nobody asked), a menu click always answers something — otherwise
+  // the button looks broken.
+  const runCheck = useRef(async (manual: boolean) => {
+    const updater = getUpdater();
+    if (!updater?.check) {
+      dlog('UpdateToast: tauri-plugin-updater not present in this build');
+      if (manual) showMessageDialog('Update plugin not available in this build.');
+      return;
+    }
+    try {
+      const result = await updater.check();
+      if (!result) {
+        dlog('UpdateToast: no update available');
+        if (manual) {
+          showMessageDialog('Velxio Desktop is up to date.', { kind: 'success' });
+        }
+        return;
+      }
+      dlog('UpdateToast: update found', { version: result.version });
+      setState({
+        kind: 'available',
+        version: result.version,
+        notes: result.body ?? null,
+        update: result,
+      });
+    } catch (err) {
+      dlog('UpdateToast: check() failed', { err: String(err) });
+      if (manual) {
+        setState({ kind: 'error', message: describeError(err) });
+      }
+      // Background failures stay silent: we don't want to nag the user
+      // about a network check they never asked for.
+    }
+  });
+
+  // Automatic check, once per session.
   useEffect(() => {
     if (checked.current) return;
     checked.current = true;
@@ -92,35 +144,20 @@ export const UpdateAvailableToast = () => {
       dlog('UpdateToast: dismissed earlier this session, skipping auto-check');
       return;
     }
-    const updater = getUpdater();
-    if (!updater?.check) {
-      dlog('UpdateToast: tauri-plugin-updater not present in this build');
-      return;
-    }
 
-    const timer = window.setTimeout(async () => {
-      try {
-        const result = await updater.check!();
-        if (!result) {
-          dlog('UpdateToast: no update available');
-          return;
-        }
-        dlog('UpdateToast: update found', { version: result.version });
-        setState({
-          kind: 'available',
-          version: result.version,
-          notes: result.body ?? null,
-          update: result,
-        });
-      } catch (err) {
-        dlog('UpdateToast: check() failed', { err: String(err) });
-        // Silent failure - we don't want to nag the user with errors
-        // from a background network check. Manual re-check via the
-        // menu still surfaces the error.
-      }
-    }, AUTO_CHECK_DELAY_MS);
-
+    const timer = window.setTimeout(
+      () => void runCheck.current(false),
+      AUTO_CHECK_DELAY_MS,
+    );
     return () => window.clearTimeout(timer);
+  }, []);
+
+  // Manual check from the menu. Deliberately ignores the session-dismiss
+  // flag: dismissing the toast once shouldn't disable the menu item.
+  useEffect(() => {
+    const onManual = () => void runCheck.current(true);
+    window.addEventListener(MANUAL_CHECK_EVENT, onManual);
+    return () => window.removeEventListener(MANUAL_CHECK_EVENT, onManual);
   }, []);
 
   if (state.kind === 'idle') return null;
@@ -173,29 +210,11 @@ export const UpdateAvailableToast = () => {
     sessionStorage.removeItem(DISMISS_KEY);
     checked.current = false;
     setState({ kind: 'idle' });
-    // Force a re-mount-style re-check by clearing checked.current and
-    // re-running the useEffect would be ideal, but we don't unmount
-    // the component. Instead, run an inline check now.
-    void (async () => {
-      const updater = getUpdater();
-      if (!updater?.check) return;
-      try {
-        const result = await updater.check();
-        if (result) {
-          setState({
-            kind: 'available',
-            version: result.version,
-            notes: result.body ?? null,
-            update: result,
-          });
-        }
-      } catch (err) {
-        setState({
-          kind: 'error',
-          message: err instanceof Error ? err.message : String(err),
-        });
-      }
-    })();
+    // Same routine as the menu: the user asked for this one, so a
+    // "you're up to date" or a failure both get reported. This used to
+    // be a third inline copy of the check whose catch clause did the
+    // `err instanceof Error ? ... : String(err)` dance by hand.
+    void runCheck.current(true);
   };
 
   return (
