@@ -64,3 +64,30 @@ describe('solverFaultReporter', () => {
     expect(reported).toHaveLength(2);
   });
 });
+
+describe('pickSolverError', () => {
+  it('prefers the verdict over the fallback notes ngspice prints first', async () => {
+    const { pickSolverError } = await import('../simulation/spice/solverFaultReporter');
+    expect(
+      pickSolverError([
+        'Note: Starting dynamic gmin stepping',
+        'Warning: dynamic gmin stepping failed',
+        'Note: Starting source stepping',
+        'Warning: singular matrix:  check node n0',
+      ]),
+    ).toBe('Warning: singular matrix:  check node n0');
+    expect(pickSolverError(['Note: Starting dynamic gmin stepping', 'Warning: source stepping failed'])).toBe(
+      'Warning: source stepping failed',
+    );
+    expect(pickSolverError(['Note: only a note'])).toBe('Note: only a note');
+    expect(pickSolverError([])).toBeNull();
+  });
+
+  it('translates a shorted source to the component and the fix', async () => {
+    const { describeSolverError, isDeadSolve } = await import('../simulation/spice/solverFaultReporter');
+    const msg = describeSolverError('Fatal error: instance b_ic_74hc02_1788636438540_69gm8vczj_1 is a shorted ASRC');
+    expect(msg).toContain('source ic_74hc02_1788636438540_69gm8vczj');
+    expect(msg).toContain('both terminals on the same net');
+    expect(isDeadSolve({ error: 'Fatal error: instance v_x is a shorted VSRC', nodeVoltages: {}, pinNetMap: new Map() })).toBe(true);
+  });
+});

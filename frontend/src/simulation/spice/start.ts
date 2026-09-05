@@ -35,7 +35,7 @@ import { connectChipInputsToSolve } from './connectChipInputsToSolve';
 import { connectMcuEdgesToService } from './connectMcuEdgesToService';
 import { setElectricalResolveHook } from './electricalResolveHook';
 import { startAnalogScopeFeed } from './analogScopeFeed';
-import { startSolverFaultReporter } from './solverFaultReporter';
+import { pickSolverError, startSolverFaultReporter } from './solverFaultReporter';
 import { collectPinStates } from './collectPinStates';
 
 /** Adapt useElectricalStore to the ElectricalStorePort. */
@@ -49,7 +49,7 @@ function createElectricalStorePort(): ElectricalStorePort {
         analysisMode: snapshot.analysisMode,
         timeWaveforms: snapshot.timeWaveforms,
         converged: snapshot.warnings.length === 0,
-        error: snapshot.warnings[0] ?? null,
+        error: pickSolverError(snapshot.warnings),
         lastSolveMs: 0,
         submittedNetlist: '',
         sourcedNets: snapshot.sourcedNets,
