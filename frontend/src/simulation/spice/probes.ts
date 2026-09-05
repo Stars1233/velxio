@@ -205,6 +205,15 @@ export function readVoltmeter(
   // yet. Printing "0.00 µV" there looks like a measurement — the 2026-09-05
   // report was a 9 V cell "reading 0 V" while the whole canvas was unsolved
   // because a regulator output was wired into the board's 5V pin.
+  // Both probe nets on ground still "read 0 V" through nodeVoltageOf, and on a
+  // dead solve that is the one net the solver does not have to report. A
+  // signal generator wired onto its own GND (ngspice: "shorted VSRC") put the
+  // meter on ground with an error in the store and it printed 0.00 uV again
+  // (velxio.dev, 2026-09-06). No voltages at all plus an error is a dead
+  // solve whatever the probe touches.
+  if (solve.error && Object.keys(solve.nodeVoltages).length === 0) {
+    return noReading('voltmeter', solve);
+  }
   const vp = nodeVoltageOf(solve, plusNet);
   const vm = nodeVoltageOf(solve, minusNet);
   if (vp === undefined || vm === undefined) return noReading('voltmeter', solve);

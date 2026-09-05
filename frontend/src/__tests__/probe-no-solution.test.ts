@@ -58,6 +58,16 @@ describe('probes with no operating point', () => {
     expect(r.stale).toBe(false);
   });
 
+  it('voltmeter: both leads on ground during a dead solve is still "solver error"', () => {
+    const gnd = () => '0';
+    const r = readVoltmeter(vm, gnd, solve({
+      converged: false,
+      error: 'Fatal error: instance v_sg is a shorted VSRC',
+    }));
+    expect(r.display).toBe(SOLVER_ERROR_DISPLAY);
+    expect(r.stale).toBe(true);
+  });
+
   it('voltmeter: ground is a reported 0 V, not a missing net', () => {
     const gnd = (_c: string, pin: string) => (pin === 'V+' ? 'n0' : '0');
     const r = readVoltmeter(vm, gnd, solve({ nodeVoltages: { n0: 3.3 } }));
