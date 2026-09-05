@@ -21,6 +21,8 @@ export interface SpiceResult {
   dcValue(name: string): number;
   vAtLast(name: string): VectorValue;
   findVar(name: string): number;
+  /** ngspice stderr from the analysis (convergence warnings, rejected deck). */
+  warnings: string[];
 }
 
 let singleton: SolverPort | null = null;
@@ -160,7 +162,7 @@ export async function runNetlist(netlist: string): Promise<SpiceResult> {
         ? mergedVectors.get('time')?.real ?? new Float64Array(0)
         : new Float64Array(0),
     solveMs: 0,
-    warnings: [] as string[],
+    warnings: (solved.warnings ?? []) as string[],
   };
   const rawVecs = all.rawNames;
 
@@ -184,6 +186,7 @@ export async function runNetlist(netlist: string): Promise<SpiceResult> {
   };
   return {
     variableNames,
+    warnings: result.warnings,
     findVar(name) {
       const l = name.toLowerCase();
       let idx = variableNames.indexOf(l);

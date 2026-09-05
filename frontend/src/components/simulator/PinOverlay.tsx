@@ -126,6 +126,23 @@ export const PinOverlay: React.FC<PinOverlayProps> = ({
   const subtle = !wiring;
   const baseBackground = subtle ? 'transparent' : 'rgba(0, 200, 255, 0.8)';
   const baseBorder = subtle ? '1.5px solid transparent' : '1.5px solid white';
+  // Some elements expose one pad under two names at the same coordinates
+  // (a XIAO's "D8" and its GPIO "7", a DevKit's "TX" and "16"). Only the
+  // top-most square is hoverable, so its tooltip carries every name of that
+  // pad — a user reading "7" on a pad silk-screened D8 wired an RGB LED one
+  // pin off (2026-09-05) because the alias was the only name they could see.
+  const namesAtPad = new Map<string, string[]>();
+  for (const p of pins) {
+    const key = `${p.x},${p.y}`;
+    const names = namesAtPad.get(key) ?? [];
+    names.push(p.name);
+    namesAtPad.set(key, names);
+  }
+  const titleFor = (pin: PinInfo): string => {
+    const names = namesAtPad.get(`${pin.x},${pin.y}`) ?? [pin.name];
+    const others = names.filter((n) => n !== pin.name);
+    return others.length ? `${pin.name} (${others.join(', ')})` : pin.name;
+  };
 
   return (
     <div
@@ -209,7 +226,7 @@ export const PinOverlay: React.FC<PinOverlayProps> = ({
               e.currentTarget.style.border = baseBorder;
               e.currentTarget.style.transform = 'scale(1)';
             }}
-            title={pin.name}
+            title={titleFor(pin)}
           />
         );
       })}

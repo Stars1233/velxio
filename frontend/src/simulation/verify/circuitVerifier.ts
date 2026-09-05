@@ -22,10 +22,10 @@
  * single solver-error warning and the rest of the rules are skipped.
  */
 import { lineGaps } from '../line/requestLine';
-import { buildNetlist } from '../spice/NetlistBuilder';
+import { buildNetlist, sanitizeSpiceId } from '../spice/NetlistBuilder';
 import { runNetlist as runSpice } from '../spice/runNetlist';
 import { UnionFind } from '../spice/unionFind';
-import { BOARD_PIN_GROUPS, auxRailNetName } from '../spice/boardPinGroups';
+import { BOARD_PIN_GROUPS, auxRailNetName, railVolts } from '../spice/boardPinGroups';
 import { isBreadboard } from '../../utils/breadboardNets';
 import type { BuildNetlistInput, ElectricalSolveResult } from '../spice/types';
 import { COMPONENT_RATINGS } from './componentRatings';
@@ -33,6 +33,7 @@ import { COMPONENT_RATINGS } from './componentRatings';
 export type WarningSeverity = 'error' | 'warning';
 export type WarningCode =
   | 'solver-failed'
+  | 'source-conflict'
   | 'unstable-solve'
   | 'short-circuit'
   | 'source-overload'
@@ -110,7 +111,16 @@ export async function verifyCircuit(
 
   // Run a forced .op solve so currents are scalar and deterministic.
   const opInput: BuildNetlistInput = { ...input, analysis: { kind: 'op' } };
-  const { netlist, pinNetMap } = buildNetlist(opInput);
+  const { netlist, pinNetMap, nets } = buildNetlist(opInput);
+
+  // ── Ideal sources fighting over one net (graph-based, no solve) ────────
+  // Two ideal voltage sources on the same pair of nodes make the .op matrix
+  // singular. ngspice then rejects the whole deck and the live solver publishes
+  // no voltages at all: every meter reads 0 V, every LED goes dark, and until
+  // 2026-09-05 nothing said why (a 7805's VOUT wired into a XIAO's 5V pin was
+  // reported as "my 9 V battery reads 0 V"). Detected from the netlist itself
+  // so both sides get named; blocking, because nothing on the canvas solves.
+  errors.push(...findSourceConflicts(netlist, input));
 
   // ── Line-owning sensors the wired board cannot host (no solve) ────────
   // A DHT22 or an HC-SR04 asks the board it is wired to for the line
@@ -646,6 +656,19 @@ export async function verifyCircuit(
   let solve: ElectricalSolveResult | undefined;
   try {
     const cooked = await runSpice(netlist);
+    // ngspice does not throw on a rejected deck: `source` returns 0, the
+    // analysis runs on nothing and the plot is empty. A circuit with nets but
+    // not one v(...) vector is that case — say so instead of waving it through
+    // with zero warnings (which is what the 2026-09-05 report saw in `[verify]`).
+    if (nets.length > 0 && !cooked.variableNames.some((n) => n.startsWith('v('))) {
+      const reason = cooked.warnings[0] ?? 'ngspice returned no node voltages';
+      errors.push({
+        severity: 'error',
+        code: 'solver-failed',
+        message: `The circuit solver rejected this circuit (${reason.trim()}). Nothing on the canvas will solve until it is fixed. Check for voltage sources wired against each other.`,
+      });
+      return { errors, warnings, componentsChecked: 0, solve };
+    }
     // Re-shape into the same flat dictionaries that the live store uses.
     const nodeVoltages: Record<string, number> = { '0': 0 };
     const branchCurrents: Record<string, number> = {};
@@ -984,4 +1007,95 @@ function parseResistance(raw: string): number {
   const mult =
     suffix === 'k' || suffix === 'K' ? 1e3 : suffix === 'M' ? 1e6 : suffix === 'g' || suffix === 'G' ? 1e9 : suffix === 'm' ? 1e-3 : 1;
   return base * mult;
+}
+
+/** Netlist source card: name plus its two nodes (V-sources and B-sources). */
+interface SourceCard {
+  name: string;
+  a: string;
+  b: string;
+}
+
+function parseSourceCards(netlist: string): SourceCard[] {
+  const out: SourceCard[] = [];
+  for (const raw of netlist.split('\n')) {
+    const line = raw.trim();
+    if (!line || line.startsWith('*') || line.startsWith('.')) continue;
+    const m = /^([VB]\S*)\s+(\S+)\s+(\S+)/.exec(line);
+    if (!m) continue;
+    out.push({ name: m[1]!, a: m[2]!, b: m[3]! });
+  }
+  return out;
+}
+
+/** Say which canvas item a netlist source card belongs to. */
+function describeSourceCard(card: SourceCard, input: BuildNetlistInput): { text: string; componentId?: string } {
+  const lower = card.name.toLowerCase();
+  if (lower === 'v_vcc_rail') return { text: "the board's main supply rail (5V / VCC / 3V3 pins)" };
+  const aux = /^v_aux_rail_(.+)$/.exec(lower);
+  if (aux) return { text: `the board's ${railVolts(aux[1]!)} supply pin` };
+  for (const board of input.boards) {
+    const prefix = `v_${sanitizeSpiceId(board.id)}_`.toLowerCase();
+    if (lower.startsWith(prefix)) {
+      const pin = Object.keys(board.pins ?? {}).find(
+        (p) => `${prefix}${sanitizeSpiceId(p)}`.toLowerCase() === lower,
+      );
+      return { text: `board ${board.id} pin ${pin ?? lower.slice(prefix.length)} (driven by the MCU)`, componentId: board.id };
+    }
+  }
+  const body = lower.slice(2); // drop "v_" / "b_"
+  for (const comp of input.components) {
+    const id = sanitizeSpiceId(comp.id).toLowerCase();
+    if (body === id || body.startsWith(`${id}_`)) {
+      const role = comp.metadataId.startsWith('reg-')
+        ? 'output (VOUT)'
+        : comp.metadataId.startsWith('battery') || comp.metadataId === 'power-supply' || comp.metadataId === 'signal-generator'
+          ? 'output'
+          : comp.metadataId.startsWith('instr-')
+            ? 'sense terminal'
+            : 'output';
+      return { text: `${comp.metadataId} ${comp.id} ${role}`, componentId: comp.id };
+    }
+  }
+  return { text: `source ${card.name}` };
+}
+
+/**
+ * Two ideal voltage sources across the same pair of nodes, or one source
+ * between a node and itself: the .op matrix is singular and ngspice rejects
+ * the deck. Exported for tests; `verifyCircuit` runs it before the solve.
+ */
+export function findSourceConflicts(netlist: string, input: BuildNetlistInput): CircuitWarning[] {
+  const cards = parseSourceCards(netlist);
+  const byPair = new Map<string, SourceCard[]>();
+  const out: CircuitWarning[] = [];
+  for (const card of cards) {
+    if (card.a === card.b) {
+      const who = describeSourceCard(card, input);
+      out.push({
+        severity: 'error',
+        code: 'source-conflict',
+        componentId: who.componentId,
+        message: `${who.text} is wired back onto its own reference (both terminals on net ${card.a}), so the circuit has no solution. Remove the wire that shorts it.`,
+      });
+      continue;
+    }
+    const key = [card.a, card.b].sort().join('|');
+    const list = byPair.get(key) ?? [];
+    list.push(card);
+    byPair.set(key, list);
+  }
+  for (const [, list] of byPair) {
+    if (list.length < 2) continue;
+    const parts = list.map((c) => describeSourceCard(c, input));
+    const names = parts.map((p) => p.text);
+    const last = names.pop()!;
+    out.push({
+      severity: 'error',
+      code: 'source-conflict',
+      componentId: parts.find((p) => p.componentId)?.componentId,
+      message: `${names.join(', ')} and ${last} are both driving the same net, so the circuit has no solution: the simulator cannot solve any voltage on the canvas until one of them is removed. Typical cause: a regulator or battery output wired straight into a board supply pin.`,
+    });
+  }
+  return out;
 }

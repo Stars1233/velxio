@@ -177,3 +177,13 @@ export function boardPinGroupFor(kind: string): BoardPinGroup {
   if (pro) return pro;
   return BOARD_PIN_GROUPS.default;
 }
+
+/**
+ * Human form of an aux-rail tag: "5" -> "5 V", "3v3" -> "3.3 V" (the net name
+ * spells the dot as "v"). Used by the messages that name a rail to the user.
+ */
+export function railVolts(tag: string): string {
+  const m = /^(\d+)(?:v(\d+))?$/.exec(tag);
+  if (!m) return `${tag} V`;
+  return m[2] ? `${m[1]}.${m[2]} V` : `${m[1]} V`;
+}
