@@ -12,7 +12,7 @@ import { InstrumentScreen } from './InstrumentScreen';
 import { useElectricalStore } from '../../store/useElectricalStore';
 import { useSimulatorStore } from '../../store/useSimulatorStore';
 import { buildPinNetLookup, readVoltmeter } from '../../simulation/spice/probes';
-import { BOARD_PIN_GROUPS } from '../../simulation/spice/boardPinGroups';
+import { boardPinGroupFor } from '../../simulation/spice/boardPinGroups';
 
 /** Instrument tint. Amber for volts, cyan for amps: the same pairing the
  *  canvas legend and the picker thumbnails use. */
@@ -33,13 +33,13 @@ export function Voltmeter({ id }: VoltmeterProps) {
 
   const reading = useMemo(() => {
     const groundPins = boards.flatMap((b) =>
-      (BOARD_PIN_GROUPS[b.boardKind] ?? BOARD_PIN_GROUPS.default).gnd.map((pin) => ({
+      boardPinGroupFor(b.boardKind).gnd.map((pin) => ({
         componentId: b.id,
         pinName: pin,
       })),
     );
     const vccPins = boards.flatMap((b) =>
-      (BOARD_PIN_GROUPS[b.boardKind] ?? BOARD_PIN_GROUPS.default).vcc_pins.map((pin) => ({
+      boardPinGroupFor(b.boardKind).vcc_pins.map((pin) => ({
         componentId: b.id,
         pinName: pin,
       })),
@@ -47,7 +47,7 @@ export function Voltmeter({ id }: VoltmeterProps) {
     // Aux-rail pins (VIN / 5V / off-voltage 3V3) so probing them reads the
     // rail's own voltage — and so the n0/n1 numbering matches the solver's.
     const auxPins = boards.flatMap((b) => {
-      const aux = (BOARD_PIN_GROUPS[b.boardKind] ?? BOARD_PIN_GROUPS.default).aux;
+      const aux = boardPinGroupFor(b.boardKind).aux;
       if (!aux) return [];
       return aux.pins.map((pin) => ({ componentId: b.id, pinName: pin, volts: aux.volts }));
     });

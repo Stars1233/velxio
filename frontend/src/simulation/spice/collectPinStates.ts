@@ -12,7 +12,7 @@ import type { PinSourceState } from './types';
 import type { BoardKind } from '../../types/board';
 import { isStm32BoardKind } from '../../types/board';
 import { stm32PinNameToLinear } from '../Stm32Bridge';
-import { BOARD_PIN_GROUPS } from './boardPinGroups';
+import { boardPinGroupFor } from './boardPinGroups';
 import { boardPinToNumber } from '../../utils/boardPinMapping';
 
 /**
@@ -26,7 +26,13 @@ import { boardPinToNumber } from '../../utils/boardPinMapping';
  * detaches every listener on resubscription and freezes LEDs mid-run.
  */
 export function pinNameToArduinoPin(pinName: string, boardKind: BoardKind): number {
-  const group = BOARD_PIN_GROUPS[boardKind] ?? BOARD_PIN_GROUPS.default;
+  // boardPinGroupFor, not BOARD_PIN_GROUPS[kind]: an overlay board (a pro XIAO)
+  // is not in that table and declares its rails through the registry instead.
+  // Indexing the table directly fell back to the 5 V default, so every GPIO
+  // V-source the netlist stamped for a 3.3 V pro board read 5 V on a meter
+  // and over-drove its LEDs (velxio.dev 2026-09-05), while the edge path
+  // (connectMcuEdgesToService) altered the same source at 3.3 V.
+  const group = boardPinGroupFor(boardKind);
   if (group.gnd.includes(pinName) || group.vcc_pins.includes(pinName)) return -1;
   // Aux-rail supply pins (VIN / 5V / off-voltage 3V3) are not GPIOs either.
   if (group.aux?.pins.includes(pinName)) return -1;
@@ -86,7 +92,7 @@ export function collectPinStates(
 ): Record<string, PinSourceState> {
   const pm = getBoardPinManager(boardId);
   if (!pm) return {};
-  const group = BOARD_PIN_GROUPS[boardKind] ?? BOARD_PIN_GROUPS.default;
+  const group = boardPinGroupFor(boardKind);
   const vcc = group.vcc;
 
   const result: Record<string, PinSourceState> = {};

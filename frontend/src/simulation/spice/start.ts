@@ -157,6 +157,9 @@ export function startSimulation(): () => void {
       hasTimeWaveforms: !!electrical.timeWaveforms,
       paused: electrical.paused,
       outputPinsByBoard,
+      rebuildCount: service.rebuildCount,
+      edgeCount: service.edgeCount,
+      lastRebuildAt: service.lastRebuildAt,
     };
     (window as unknown as { __lastSpice?: unknown }).__lastSpice = snapshot;
     // eslint-disable-next-line no-console
