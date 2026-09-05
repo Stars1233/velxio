@@ -469,7 +469,8 @@
       "log": {
         "compiling": "Compilando el sketch antes de grabar...",
         "recompiling": "El código cambió desde la última compilación: recompilando antes de grabar...",
-        "compiled": "Compilación OK en {{seconds}} s. Empezando a grabar..."
+        "compiled": "Compilación OK en {{seconds}} s. Empezando a grabar...",
+        "compilingRevision": "Compilando para {{revision}} (solo para grabar; el simulador conserva su build)..."
       },
       "downloadUf2": "Descargar .uf2",
       "downloadUf2Hint": "Prefieres copiar el archivo a mano? Guarda el .uf2 y sueltalo en la unidad USB de la placa (RPI-RP2 o RP2350).",
@@ -485,7 +486,10 @@
         "rebooting": "Reiniciando la placa en modo bootloader...",
         "rebooted": "Listo. La placa esta en modo bootloader: pulsa el boton de grabar.",
         "failed": "No se pudo reiniciar la placa: {{error}}"
-      }
+      },
+      "revision": "Revision de la placa real",
+      "saveToDrive": "Copiar a la unidad de la placa",
+      "savedToDrive": "{{file}} copiado en {{drive}}. La placa reinicia con tu sketch."
     }
   },
   "about": {

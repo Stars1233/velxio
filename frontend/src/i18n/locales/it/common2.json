@@ -459,7 +459,8 @@
       "log": {
         "compiling": "Compilazione dello sketch prima del flash...",
         "recompiling": "Il codice è cambiato dall'ultima build: ricompilazione prima del flash...",
-        "compiled": "Build OK in {{seconds}} s. Avvio del flash..."
+        "compiled": "Build OK in {{seconds}} s. Avvio del flash...",
+        "compilingRevision": "Compilazione per {{revision}} (solo per la programmazione; il simulatore mantiene la sua build)..."
       },
       "downloadUf2": "Scarica .uf2",
       "downloadUf2Hint": "Preferisci copiare il file a mano? Salva il .uf2 e trascinalo sull'unita USB della scheda (RPI-RP2 o RP2350).",
@@ -475,7 +476,10 @@
         "rebooting": "Riavvio della scheda in modalita bootloader...",
         "rebooted": "Fatto. La scheda e in modalita bootloader: premi il pulsante di programmazione.",
         "failed": "Impossibile riavviare la scheda: {{error}}"
-      }
+      },
+      "revision": "Revisione della scheda reale",
+      "saveToDrive": "Copia sull'unita della scheda",
+      "savedToDrive": "{{file}} copiato su {{drive}}. La scheda si riavvia con il tuo sketch."
     }
   },
   "about": {

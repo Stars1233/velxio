@@ -459,7 +459,8 @@
       "log": {
         "compiling": "烧录前先编译程序...",
         "recompiling": "上次构建后代码有改动：烧录前重新编译...",
-        "compiled": "构建成功，用时 {{seconds}} 秒。开始烧录..."
+        "compiled": "构建成功，用时 {{seconds}} 秒。开始烧录...",
+        "compilingRevision": "正在为 {{revision}} 构建 (仅用于烧录；模拟器保留自己的构建)..."
       },
       "downloadUf2": "下载 .uf2",
       "downloadUf2Hint": "想自己复制文件？保存 .uf2 并把它拖到开发板的 USB 驱动器 (RPI-RP2 或 RP2350) 上。",
@@ -475,7 +476,10 @@
         "rebooting": "正在把开发板重启到引导加载程序模式...",
         "rebooted": "完成。开发板已进入引导加载程序模式，请点击烧录按钮。",
         "failed": "无法重启开发板: {{error}}"
-      }
+      },
+      "revision": "实际开发板版本",
+      "saveToDrive": "复制到开发板驱动器",
+      "savedToDrive": "已将 {{file}} 复制到 {{drive}}。开发板会重启并运行你的程序。"
     }
   },
   "about": {

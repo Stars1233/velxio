@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   base64ToBytes,
   boardKindHasUf2,
+  canSaveToDrive,
   downloadUf2,
   fqbnUsesUf2,
+  NotBootselDriveError,
+  saveUf2ToDrive,
   uf2FileName,
 } from '../utils/uf2Download';
 
@@ -81,5 +84,67 @@ describe('downloadUf2', () => {
     expect(clicks).toEqual([{ href: 'blob:fake', download: 'sketch.uf2' }]);
     expect(blobs).toHaveLength(1);
     expect(new Uint8Array(await blobs[0].arrayBuffer())).toEqual(new Uint8Array([0, 1, 2]));
+  });
+});
+
+describe('saveUf2ToDrive', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  interface FakeDrive {
+    name: string;
+    files: Map<string, Uint8Array>;
+    bootsel: boolean;
+    closeThrows?: boolean;
+  }
+
+  function fakeDir(d: FakeDrive) {
+    return {
+      name: d.name,
+      async getFileHandle(name: string, opts?: { create?: boolean }) {
+        if (name === 'INFO_UF2.TXT') {
+          if (!d.bootsel) throw new DOMException('not found', 'NotFoundError');
+          return {};
+        }
+        if (!opts?.create && !d.files.has(name)) throw new DOMException('not found', 'NotFoundError');
+        return {
+          async createWritable() {
+            return {
+              async write(data: ArrayBuffer) {
+                d.files.set(name, new Uint8Array(data));
+              },
+              async close() {
+                if (d.closeThrows) throw new DOMException('device gone', 'NetworkError');
+              },
+            };
+          },
+        };
+      },
+    } as unknown as FileSystemDirectoryHandle;
+  }
+
+  it('is unavailable without the File System Access API', () => {
+    vi.stubGlobal('window', {});
+    expect(canSaveToDrive()).toBe(false);
+  });
+
+  it('writes the decoded file onto a BOOTSEL drive', async () => {
+    const drive: FakeDrive = { name: 'RP2350', files: new Map(), bootsel: true };
+    const result = await saveUf2ToDrive('AAEC', 'sketch.uf2', async () => fakeDir(drive));
+    expect(result).toEqual({ drive: 'RP2350' });
+    expect(Array.from(drive.files.get('sketch.uf2')!)).toEqual([0, 1, 2]);
+  });
+
+  it('treats a close() that fails after the write as success (the board rebooted)', async () => {
+    const drive: FakeDrive = { name: 'RPI-RP2', files: new Map(), bootsel: true, closeThrows: true };
+    await expect(saveUf2ToDrive('AAEC', 'sketch.uf2', async () => fakeDir(drive))).resolves.toEqual({ drive: 'RPI-RP2' });
+    expect(drive.files.has('sketch.uf2')).toBe(true);
+  });
+
+  it('refuses a folder that is not a BOOTSEL drive, writing nothing', async () => {
+    const drive: FakeDrive = { name: 'Documents', files: new Map(), bootsel: false };
+    await expect(saveUf2ToDrive('AAEC', 'sketch.uf2', async () => fakeDir(drive))).rejects.toBeInstanceOf(NotBootselDriveError);
+    expect(drive.files.size).toBe(0);
   });
 });

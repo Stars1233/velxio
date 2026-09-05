@@ -44,16 +44,28 @@ import {
   webFlashAvailable,
   webFlashMpyAvailable,
   webFlashBootloaderHint,
+  webFlashHardwareRevisions,
   isNotInBootloaderError,
   hardwareFlashAllowed,
   hardwareFlashUpgradeUrl,
   type BootloaderHint,
+  type HardwareRevision,
 } from '../../lib/proWebFlash';
 import { openExternal } from '../../desktop/tauriBridge';
 import { useEditorStore } from '../../store/useEditorStore';
 import { useProjectStore } from '../../store/useProjectStore';
-import { compileBoardForFlash, isCompiledProgramStale } from '../../utils/boardCompile';
-import { downloadUf2, fqbnUsesUf2, uf2FileName } from '../../utils/uf2Download';
+import {
+  compileBoardForFlash,
+  currentSourceFingerprint,
+  isCompiledProgramStale,
+} from '../../utils/boardCompile';
+import {
+  canSaveToDrive,
+  downloadUf2,
+  fqbnUsesUf2,
+  saveUf2ToDrive,
+  uf2FileName,
+} from '../../utils/uf2Download';
 
 interface Props {
   board: BoardInstance;
@@ -64,10 +76,10 @@ interface Props {
 type ModalState =
   | { kind: 'loading-ports' }
   | { kind: 'picking'; ports: SerialPortInfo[]; selectedPath: string | null }
-  /** `downloaded`: the .uf2 just saved from this dialog (RP2 boards). */
-  | { kind: 'web-ready'; downloaded?: string }
+  /** `downloaded`: the .uf2 just saved from this dialog (RP2 boards); `drive` = onto the board's drive. */
+  | { kind: 'web-ready'; downloaded?: string; drive?: string }
   /** Web, no flasher for this kind, but a .uf2 to hand over (RP2 boards). */
-  | { kind: 'download-only'; downloaded?: string }
+  | { kind: 'download-only'; downloaded?: string; drive?: string }
   | { kind: 'compiling'; port: string | null; log: string[] }
   | { kind: 'flashing'; port: string; log: string[]; progress: number }
   | { kind: 'success'; port: string; elapsedMs: number; log: string[] }
@@ -103,6 +115,27 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
   // RP2040 / RP2350: picotool and the BOOTSEL drive take a .uf2, not the
   // raw .bin the emulator runs, so the flash needs `compiledUf2`.
   const usesUf2 = fqbnUsesUf2(fqbn);
+  // Hardware revisions of this kind (a Unicorn with a Pico W vs a Pico 2 W
+  // aboard). The first one is what the simulator runs; picking another
+  // builds a second image for the flash only, never for the emulator.
+  const revisions: HardwareRevision[] | null = webFlashHardwareRevisions(board.boardKind);
+  const [revisionId, setRevisionId] = useState<string | null>(
+    () => board.flashRevision ?? revisions?.[0]?.id ?? null,
+  );
+  const activeRevision = revisions?.find((r) => r.id === revisionId) ?? null;
+  const hwFqbn = activeRevision?.fqbn ?? fqbn;
+  const isAltRevision = hwFqbn !== fqbn;
+  const hwUsesUf2 = fqbnUsesUf2(hwFqbn);
+  // The alternate-revision build lives here, not in the store: the emulator
+  // must never pick up an RP2040 image for a board it runs as RP2350.
+  const altBuildRef = useRef<{ fqbn: string; hash: string; program: string; uf2: string | null } | null>(null);
+  const pickRevision = useCallback(
+    (id: string) => {
+      setRevisionId(id);
+      useSimulatorStore.getState().updateBoard(board.id, { flashRevision: id });
+    },
+    [board.id],
+  );
   // Bootloader step (RP2 BOOTSEL and the like), if the flasher wants one.
   const bootloaderHint: BootloaderHint | null = isWebMode
     ? webFlashBootloaderHint(board.boardKind)
@@ -154,9 +187,19 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
   const ensureProgram = useCallback(
     async (port: string | null): Promise<string | null> => {
       const live = useSimulatorStore.getState().boards.find((b) => b.id === board.id) ?? board;
-      // A fresh build is reusable unless this board needs the .uf2 and the
-      // build predates it (older server): then rebuild to get one.
-      if (live.compiledProgram && !isCompiledProgramStale(live) && (!usesUf2 || live.compiledUf2)) {
+      if (isAltRevision) {
+        // Another chip than the simulator's: a build of its own, reused
+        // while the sources and the revision stay the same.
+        const alt = altBuildRef.current;
+        const hash = currentSourceFingerprint(live);
+        if (alt && alt.fqbn === hwFqbn && alt.hash === hash) return alt.program;
+      } else if (
+        live.compiledProgram &&
+        !isCompiledProgramStale(live) &&
+        (!usesUf2 || live.compiledUf2)
+      ) {
+        // A fresh build is reusable unless this board needs the .uf2 and
+        // the build predates it (older server): then rebuild to get one.
         return live.compiledProgram;
       }
       logRef.current = [];
@@ -166,11 +209,17 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
         setState((prev) => (prev.kind === 'compiling' ? { ...prev, log: logRef.current } : prev));
       };
       push(
-        live.compiledProgram
-          ? t('editor.flash.log.recompiling')
-          : t('editor.flash.log.compiling'),
+        isAltRevision
+          ? t('editor.flash.log.compilingRevision', { revision: activeRevision?.label ?? hwFqbn })
+          : live.compiledProgram
+            ? t('editor.flash.log.recompiling')
+            : t('editor.flash.log.compiling'),
       );
-      const outcome = await compileBoardForFlash(live, push);
+      const outcome = await compileBoardForFlash(
+        live,
+        push,
+        isAltRevision ? { fqbn: hwFqbn, record: false } : {},
+      );
       if (!outcome.ok) {
         setState({
           kind: 'error',
@@ -182,22 +231,36 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
         return null;
       }
       push(t('editor.flash.log.compiled', { seconds: (outcome.elapsedMs / 1000).toFixed(1) }));
+      if (isAltRevision) {
+        altBuildRef.current = {
+          fqbn: hwFqbn,
+          hash: currentSourceFingerprint(live),
+          program: outcome.program,
+          uf2: outcome.uf2,
+        };
+      }
       return outcome.program;
     },
-    [board, t, usesUf2],
+    [board, t, usesUf2, isAltRevision, hwFqbn, activeRevision],
   );
 
   /**
    * The bytes real hardware takes: the .uf2 for RP2 boards (null when the
-   * build has none), the program itself for everyone else.
+   * build has none), the program itself for everyone else. An alternate
+   * revision's build comes from the dialog's own copy.
    */
   const hardwareProgram = useCallback(
     (program: string): string | null => {
+      if (isAltRevision) {
+        const alt = altBuildRef.current;
+        if (!alt) return null;
+        return hwUsesUf2 ? alt.uf2 : alt.program;
+      }
       if (!usesUf2) return program;
       const live = useSimulatorStore.getState().boards.find((b) => b.id === board.id);
       return live?.compiledUf2 ?? null;
     },
-    [board.id, usesUf2],
+    [board.id, usesUf2, isAltRevision, hwUsesUf2],
   );
 
   const refreshPorts = useCallback(async () => {
@@ -232,12 +295,12 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
       // Keep the compile output above the flash output in the console.
       setState({ kind: 'flashing', port, log: logRef.current, progress: 0 });
 
-      const fmt = formatForFqbn(fqbn);
+      const fmt = formatForFqbn(hwFqbn);
       try {
         for await (const ev of streamFlash({
           boardId: board.id,
           port,
-          fqbn,
+          fqbn: hwFqbn,
           programFormat: fmt,
           programData,
         })) {
@@ -284,37 +347,63 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
         });
       }
     },
-    [board.id, fqbn, ensureProgram, hardwareProgram, t],
+    [board.id, hwFqbn, ensureProgram, hardwareProgram, t],
   );
 
   // ── Download the .uf2 (RP2 boards; every browser) ────────────────
-  const doDownload = useCallback(async () => {
-    const program = await ensureProgram(null);
-    if (!program) return; // compile failed — error state already shown
-    const uf2 = hardwareProgram(program);
-    if (!uf2) {
-      setState({
-        kind: 'error',
-        port: null,
-        message: t('editor.flash.noUf2'),
-        log: [...logRef.current],
-        stage: 'flash',
-      });
-      return;
-    }
-    const fileName = uf2FileName(
-      useProjectStore.getState().currentProject?.slug ?? board.name,
-      board.boardKind,
-    );
-    downloadUf2(uf2, fileName);
-    // Back to the view this browser started from: a flasher-capable browser
-    // keeps its Connect & flash button, the download-only one its copy.
-    setState(
-      isWebMode
-        ? { kind: 'web-ready', downloaded: fileName }
-        : { kind: 'download-only', downloaded: fileName },
-    );
-  }, [board.boardKind, board.name, ensureProgram, hardwareProgram, isWebMode, t]);
+  // `toDrive`: write it onto the BOOTSEL drive through the File System
+  // Access API instead of the downloads folder (Chromium only).
+  const doDownload = useCallback(
+    async (toDrive = false) => {
+      const program = await ensureProgram(null);
+      if (!program) return; // compile failed — error state already shown
+      const uf2 = hardwareProgram(program);
+      if (!uf2) {
+        setState({
+          kind: 'error',
+          port: null,
+          message: t('editor.flash.noUf2'),
+          log: [...logRef.current],
+          stage: 'flash',
+        });
+        return;
+      }
+      const fileName = uf2FileName(
+        useProjectStore.getState().currentProject?.slug ?? board.name,
+        board.boardKind,
+      );
+      let drive: string | undefined;
+      if (toDrive) {
+        try {
+          drive = (await saveUf2ToDrive(uf2, fileName)).drive;
+        } catch (err) {
+          if (err instanceof DOMException && err.name === 'AbortError') {
+            // The picker was dismissed: nothing happened.
+            setState(isWebMode ? { kind: 'web-ready' } : { kind: 'download-only' });
+            return;
+          }
+          setState({
+            kind: 'error',
+            port: null,
+            message: err instanceof Error ? err.message : String(err),
+            log: [...logRef.current],
+            stage: 'flash',
+          });
+          return;
+        }
+      } else {
+        downloadUf2(uf2, fileName);
+      }
+      // Back to the view this browser started from: a flasher-capable browser
+      // keeps its Connect & flash button, the download-only one its copy.
+      setState(
+        isWebMode
+          ? { kind: 'web-ready', downloaded: fileName, drive }
+          : { kind: 'download-only', downloaded: fileName, drive },
+      );
+    },
+    [board.boardKind, board.name, ensureProgram, hardwareProgram, isWebMode, t],
+  );
 
   // ── Reboot into the bootloader (pro overlay backend, RP2 boards) ──
   const doEnterBootloader = useCallback(async () => {
@@ -399,7 +488,8 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
           : await impl.flash({
               boardId: board.id,
               boardKind: board.boardKind,
-              binaryBase64: program ?? '',
+              fqbn: hwFqbn,
+              binaryBase64: (program && hardwareProgram(program)) ?? program ?? '',
               signal: ctrl.signal,
               onProgress,
             });
@@ -422,7 +512,7 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
     } finally {
       abortRef.current = null;
     }
-  }, [board.id, board.boardKind, board.activeFileGroupId, isMpy, ensureProgram]);
+  }, [board.id, board.boardKind, board.activeFileGroupId, isMpy, ensureProgram, hardwareProgram, hwFqbn]);
 
   const handleClose = useCallback(() => {
     abortRef.current?.abort();
@@ -482,6 +572,27 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
 
         {!flashAllowed && <PaidGateView onClose={handleClose} />}
 
+        {flashAllowed &&
+          revisions &&
+          (state.kind === 'web-ready' ||
+            state.kind === 'download-only' ||
+            state.kind === 'picking') && (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: 'var(--wb-11)' }}>
+              {t('editor.flash.revision')}
+              <select
+                value={revisionId ?? ''}
+                onChange={(e) => pickRevision(e.target.value)}
+                style={{ ...selectStyle, flex: 1 }}
+              >
+                {revisions.map((r) => (
+                  <option key={r.id} value={r.id}>
+                    {r.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
         {flashAllowed && state.kind === 'loading-ports' && (
           <div style={{ padding: '24px 0', textAlign: 'center', color: 'var(--wb-10)' }}>
             {t('editor.flash.detectingPorts')}
@@ -508,6 +619,7 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
             bootStatus={bootStatus}
             onEnterBootloader={() => void doEnterBootloader()}
             downloaded={state.downloaded}
+            drive={state.drive}
           />
         )}
 
@@ -515,7 +627,9 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
           <DownloadOnlyView
             board={board}
             downloaded={state.downloaded}
+            drive={state.drive}
             onDownload={() => void doDownload()}
+            onSaveToDrive={canSaveToDrive() ? () => void doDownload(true) : undefined}
           />
         )}
 
@@ -546,7 +660,7 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
         )}
 
         {flashAllowed &&
-          usesUf2 &&
+          hwUsesUf2 &&
           !isMpy &&
           (state.kind === 'web-ready' ||
             state.kind === 'picking' ||
@@ -557,6 +671,14 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
               <button type="button" onClick={() => void doDownload()} style={linkBtnStyle}>
                 {t('editor.flash.downloadUf2')}
               </button>
+              {canSaveToDrive() && (
+                <>
+                  {' '}
+                  <button type="button" onClick={() => void doDownload(true)} style={linkBtnStyle}>
+                    {t('editor.flash.saveToDrive')}
+                  </button>
+                </>
+              )}
             </div>
           )}
       </div>
@@ -612,10 +734,14 @@ const BootloaderPanel = ({ hint, status, onEnter }: BootloaderPanelProps) => {
 interface DownloadOnlyProps {
   board: BoardInstance;
   downloaded?: string;
+  /** Drive name when the file went straight onto the BOOTSEL drive. */
+  drive?: string;
   onDownload: () => void;
+  /** Present when the browser can write to the drive itself. */
+  onSaveToDrive?: () => void;
 }
 
-const DownloadOnlyView = ({ board, downloaded, onDownload }: DownloadOnlyProps) => {
+const DownloadOnlyView = ({ board, downloaded, drive, onDownload, onSaveToDrive }: DownloadOnlyProps) => {
   const { t } = useTranslation();
   const status = buildStatusOf(board);
   return (
@@ -631,7 +757,9 @@ const DownloadOnlyView = ({ board, downloaded, onDownload }: DownloadOnlyProps) 
 
       {downloaded && (
         <div style={{ padding: 10, background: 'var(--color-feedback-success-soft)', color: 'var(--color-feedback-success)', borderRadius: 4, fontSize: 12, marginBottom: 12 }}>
-          {t('editor.flash.downloaded', { file: downloaded })}
+          {drive
+            ? t('editor.flash.savedToDrive', { file: downloaded, drive })
+            : t('editor.flash.downloaded', { file: downloaded })}
         </div>
       )}
 
@@ -639,7 +767,12 @@ const DownloadOnlyView = ({ board, downloaded, onDownload }: DownloadOnlyProps) 
         <BuildNotice status={status} />
       </div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+        {onSaveToDrive && (
+          <button type="button" onClick={onSaveToDrive} style={secondaryBtnStyle}>
+            {t('editor.flash.saveToDrive')}
+          </button>
+        )}
         <button type="button" onClick={onDownload} style={primaryBtnStyle}>
           {status === 'fresh' ? t('editor.flash.downloadUf2') : t('editor.flash.compileDownload')}
         </button>
@@ -810,6 +943,8 @@ interface WebReadyProps {
   onEnterBootloader: () => void;
   /** File name of a .uf2 saved from this dialog, if any. */
   downloaded?: string;
+  /** Drive name when the file went straight onto the BOOTSEL drive. */
+  drive?: string;
 }
 
 const WebReadyView = ({
@@ -820,6 +955,7 @@ const WebReadyView = ({
   bootStatus,
   onEnterBootloader,
   downloaded,
+  drive,
 }: WebReadyProps) => {
   const { t } = useTranslation();
   // MicroPython boards carry the 'micropython-loaded' sentinel instead of
@@ -852,7 +988,9 @@ const WebReadyView = ({
 
       {downloaded && (
         <div style={{ padding: 10, background: 'var(--color-feedback-success-soft)', color: 'var(--color-feedback-success)', borderRadius: 4, fontSize: 12, marginBottom: 12 }}>
-          {t('editor.flash.downloaded', { file: downloaded })}
+          {drive
+            ? t('editor.flash.savedToDrive', { file: downloaded, drive })
+            : t('editor.flash.downloaded', { file: downloaded })}
         </div>
       )}
 
