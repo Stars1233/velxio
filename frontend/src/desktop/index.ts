@@ -28,6 +28,7 @@ import { createElement, createElement as h, Fragment } from 'react';
 import { DesktopWelcomePage } from './DesktopWelcomePage';
 import { Esp32QemuPrompt } from './Esp32QemuPrompt';
 import { Stm32QemuPrompt } from './Stm32QemuPrompt';
+import { RaspberryPiQemuPrompt } from './RaspberryPiQemuPrompt';
 import { GraceBanner } from './GraceBanner';
 import { LockoutOverlay, type LockoutReason } from './LockoutOverlay';
 import { UpdateAvailableToast } from './UpdateAvailableToast';
@@ -101,6 +102,7 @@ function mountSidePanels(): void {
       h(GraceBanner, null),
       h(Esp32QemuPrompt, null),
       h(Stm32QemuPrompt, null),
+      h(RaspberryPiQemuPrompt, null),
       // v0.4.0 auto-update toast (~30s after mount). Lives below the
       // grace banner z-index so a lockout / hard-grace doesn't get
       // covered by a "new version available" pitch.

@@ -7,9 +7,12 @@
  * Rust stm32_qemu_status / stm32_qemu_eligibility / stm32_qemu_install
  * commands.
  *
- * Raspberry Pi has no equivalent prompt: its boot images are downloaded by the
- * Python boot-image provider on first Pi boot (the sidecar passes the license
- * key + CDN base URL), so there's nothing for a one-shot Rust download to do.
+ * Raspberry Pi has its own prompt now (RaspberryPiQemuPrompt). This comment
+ * used to say it needed none, reasoning that the Python boot-image provider
+ * already downloads the kernel/initramfs/rootfs on first boot. True, but it
+ * overlooked the emulator itself: the desktop bundle ships no
+ * qemu-system-aarch64, so every Pi start failed on a missing binary while the
+ * images downloaded perfectly.
  */
 
 import { isStm32BoardKind } from '../types/board';
