@@ -39,7 +39,7 @@ export interface SimulatorStorePort {
       start: { componentId: string; pinName: string };
       end: { componentId: string; pinName: string };
     }>;
-    boards: Array<{ id: string; boardKind: string; pinStates?: Record<string, unknown> }>;
+    boards: Array<{ id: string; boardKind: string; running?: boolean; pinStates?: Record<string, unknown> }>;
     /** Components destroyed at runtime (P4) — excluded from the netlist so a
      *  burnt part actually goes open. Optional for non-store ports. */
     burntComponents?: Set<string>;
@@ -110,6 +110,32 @@ export interface ServiceOptions {
   ) => Record<string, unknown>;
 }
 
+/**
+ * The netlist reads three things from a board: its id, its kind, and its
+ * pin states, and the last are collected from the PinManager at solve time,
+ * not from the store slice. So a new `boards` array only warrants a rebuild
+ * when a board was added, removed, changed kind, or started/stopped (Stop
+ * resets every pin, so the V-sources must go). Everything else that rewrites
+ * the slice, above all the per-frame serial batcher appending `serialOutput`
+ * to the board object, must NOT: on an ESP32 printing a line per GPIO write
+ * that was one full rebuild+solve per edge, measured at rebuildCount climbing
+ * in step with edgeCount, and each rebuild re-stamped the sources from
+ * scratch instead of the cheap in-place alter.
+ */
+export function boardsChangedForNetlist(
+  next: ReadonlyArray<{ id: string; boardKind: string; running?: boolean }>,
+  prev: ReadonlyArray<{ id: string; boardKind: string; running?: boolean }>,
+): boolean {
+  if (next === prev) return false;
+  if (next.length !== prev.length) return true;
+  for (let i = 0; i < next.length; i++) {
+    const a = next[i]!;
+    const b = prev[i]!;
+    if (a.id !== b.id || a.boardKind !== b.boardKind || !!a.running !== !!b.running) return true;
+  }
+  return false;
+}
+
 export class CircuitSimulationService {
   /**
    * The last REAL transient capture published, kept so a DC re-solve on a
@@ -147,6 +173,14 @@ export class CircuitSimulationService {
     analysisKind: 'op' | 'tran' | 'ac';
     sourcedNets: Set<string>;
   } | null = null;
+
+  /** Diagnostics read by `__spiceDebug()`: how many full netlist rebuilds
+   *  and how many in-place source alters this service has run. A meter that
+   *  flips between two supply voltages, or a pin that seems to ignore its
+   *  edges, is usually one of these counters climbing when it should not. */
+  rebuildCount = 0;
+  edgeCount = 0;
+  lastRebuildAt = 0;
 
   /** Set by `stop()`. Once true, `tick()` and `handleMcuEdge()`
    *  short-circuit so a service whose owner has unsubscribed can't
@@ -340,6 +374,7 @@ export class CircuitSimulationService {
       // alter + resolveDc internally; the scheduler's
       // onMcuPinChange covers both steps.
       await this.scheduler.onMcuPinChange(boardId, pinName, state, vcc);
+      this.edgeCount++;
       this.publishFromLastResult();
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -356,6 +391,8 @@ export class CircuitSimulationService {
   }
 
   private async runSolve(): Promise<void> {
+    this.rebuildCount++;
+    this.lastRebuildAt = Date.now();
     const state = this.simStore.getState();
     // P4: a runtime-destroyed part is excluded from the netlist so it actually
     // goes open — its current stops and anything it fed loses power (cascading
@@ -492,7 +529,7 @@ export class CircuitSimulationService {
       if (
         n.components !== p.components ||
         n.wires !== p.wires ||
-        n.boards !== p.boards ||
+        boardsChangedForNetlist(n.boards, p.boards) ||
         // P4: a part burning out (or a Reset un-burning it) changes which
         // components are in the netlist, so re-solve to apply the open.
         n.burntComponents !== p.burntComponents

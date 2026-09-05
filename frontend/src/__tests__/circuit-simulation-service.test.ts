@@ -202,6 +202,41 @@ describe('CircuitSimulationService — orchestration', () => {
     expect(fake.calls.solve.length).toBe(1);
   });
 
+  it('does NOT re-solve when a board only appended serial output', async () => {
+    // The serial batcher rewrites `boards` once per frame with a longer
+    // serialOutput. An ESP32 printing a line per GPIO write used to pay one
+    // full rebuild+solve per edge for that (rebuildCount climbing in step with
+    // edgeCount on velxio.dev, 2026-09-05).
+    const fake = new FakeSolverAdapter({ vectors: { 'v(vcc_rail)': 5 } });
+    __setSchedulerSolverFactoryForTests(() => fake);
+    const sim = makeSimStore(simpleBoardWithBoard);
+    const elec = makeElectricalStore();
+    const service = new CircuitSimulationService(
+      sim.port,
+      elec.port,
+      getMixedModeScheduler() as unknown as MixedModeSchedulerPort,
+      { collectBoardPinStates: () => ({}) },
+    );
+    startTracked(service);
+    await new Promise((r) => setTimeout(r, 10));
+    expect(service.rebuildCount).toBe(1);
+
+    sim.set({ boards: [{ id: 'uno', boardKind: 'arduino-uno', serialOutput: 'H\n' } as never] });
+    sim.set({ boards: [{ id: 'uno', boardKind: 'arduino-uno', serialOutput: 'H\nL\n' } as never] });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(fake.calls.solve.length).toBe(1);
+    expect(service.rebuildCount).toBe(1);
+
+    // Stop resets every pin, so a running flip must still rebuild.
+    sim.set({ boards: [{ id: 'uno', boardKind: 'arduino-uno', running: true } as never] });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(service.rebuildCount).toBe(2);
+    // A kind change rebuilds too.
+    sim.set({ boards: [{ id: 'uno', boardKind: 'arduino-nano', running: true } as never] });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(service.rebuildCount).toBe(3);
+  });
+
   it('coalesces solves when one is in flight', async () => {
     const fake = new FakeSolverAdapter({
       vectors: { 'v(vcc_rail)': 5 },

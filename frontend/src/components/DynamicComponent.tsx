@@ -33,7 +33,7 @@ import {
   configFromLogicFamily,
   type PinResolver,
 } from '../simulation/PinResolver';
-import { BOARD_PIN_GROUPS } from '../simulation/spice/boardPinGroups';
+import { boardPinGroupFor } from '../simulation/spice/boardPinGroups';
 import { traceDetailed } from '../simulation/PinTrace';
 import { withPartPinOwnership, releasePartPins } from '../simulation/partPinOwnership';
 import { getMixedModeScheduler } from '../simulation/spice/MixedModeScheduler';
@@ -610,7 +610,7 @@ export const DynamicComponent: React.FC<DynamicComponentProps> = ({
       const ownerBoard =
         simState.boards.find((b) => b.id === simState.activeBoardId) ?? null;
       const ownerBoardVcc =
-        (ownerBoard && BOARD_PIN_GROUPS[ownerBoard.boardKind as keyof typeof BOARD_PIN_GROUPS]?.vcc) ?? 5;
+        (ownerBoard && boardPinGroupFor(ownerBoard.boardKind).vcc) ?? 5;
       const getPinResolver = (componentPinName: string): PinResolver | null => {
         const state = useSimulatorStore.getState();
         const pinManager = (stubSimulator as {

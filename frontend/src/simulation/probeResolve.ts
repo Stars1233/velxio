@@ -27,7 +27,7 @@
 import type { Wire, WireEndpoint } from '../types/wire';
 import type { BoardInstance } from '../types/board';
 import { boardPinToNumber } from '../utils/boardPinMapping';
-import { BOARD_PIN_GROUPS } from './spice/boardPinGroups';
+import { boardPinGroupFor } from './spice/boardPinGroups';
 import { traceDetailed, type TraceState } from './PinTrace';
 import { ADC_PIN_MAP } from './spice/connectAnalogInputsToMcu';
 
@@ -68,7 +68,7 @@ function boardOf(ctx: ProbeContext, componentId: string): BoardInstance | undefi
 }
 
 function vccOf(board: BoardInstance): number {
-  return (BOARD_PIN_GROUPS[board.boardKind] ?? BOARD_PIN_GROUPS.default).vcc;
+  return boardPinGroupFor(board.boardKind).vcc;
 }
 
 /**
