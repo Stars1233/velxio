@@ -17,6 +17,8 @@ image byte-for-byte.
 
 from __future__ import annotations
 
+import re
+
 # Sizes QEMU's esp32-picsimlab MTD layer accepts. ESP32 / S3 / C3 builds
 # all default to 4 MB (CONFIG_ESPTOOLPY_FLASHSIZE_4MB). We only ever
 # round UP — never down.
@@ -42,3 +44,19 @@ def pad_to_flash_size(fw_bytes: bytes) -> bytes:
     if len(fw_bytes) >= target:
         return fw_bytes
     return fw_bytes + b'\xff' * (target - len(fw_bytes))
+
+
+_MICROPYTHON_BANNER = re.compile(rb'MicroPython v\d+\.\d+')
+
+
+def firmware_is_micropython(image: bytes) -> bool:
+    """True when a flash image carries a MicroPython app.
+
+    The REPL banner ("MicroPython v1.28.0 on 2026-04-06; ...") is a string
+    literal in every build's .rodata, so its prefix is the signature. The
+    `esp_app_desc_t` every ESP-IDF app carries would be the principled place
+    to look, but MicroPython builds leave its `version` and `project_name`
+    fields all zeros (checked against ESP32_GENERIC v1.28.0: only `time`,
+    `date` and `idf_ver` are filled in), so it says nothing there.
+    """
+    return _MICROPYTHON_BANNER.search(image) is not None

@@ -46,6 +46,29 @@ import tempfile
 import threading
 import time
 
+# DHT22 reply model: what arms it and how the frame is paced on the guest's
+# clock (issue #291). Same fallback dance as the slave modules below.
+try:
+    from app.services.esp32_dht22 import (
+        Dht22Reply as _Dht22Reply,
+        Dht22Trigger as _Dht22Trigger,
+        coerce_number as _dht22_num,
+        dht22_payload as _dht22_payload_bytes,
+        dht22_phases as _dht22_phases,
+    )
+except ImportError:
+    import importlib.util as _ilu_dht, pathlib as _pl_dht, sys as _sys_dht
+    _spec_dht = _ilu_dht.spec_from_file_location(
+        'esp32_dht22', _pl_dht.Path(__file__).parent / 'esp32_dht22.py')
+    _mod_dht = _ilu_dht.module_from_spec(_spec_dht)  # type: ignore[arg-type]
+    _sys_dht.modules['esp32_dht22'] = _mod_dht
+    _spec_dht.loader.exec_module(_mod_dht)  # type: ignore[union-attr]
+    _Dht22Reply = _mod_dht.Dht22Reply            # type: ignore[assignment]
+    _Dht22Trigger = _mod_dht.Dht22Trigger        # type: ignore[assignment]
+    _dht22_num = _mod_dht.coerce_number          # type: ignore[assignment]
+    _dht22_payload_bytes = _mod_dht.dht22_payload  # type: ignore[assignment]
+    _dht22_phases = _mod_dht.dht22_phases        # type: ignore[assignment]
+
 # I2C slave state machines — extracted to a standalone module for testability
 try:
     from app.services.esp32_i2c_slaves import (
@@ -353,6 +376,37 @@ class _RmtDecoder:
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
+# ── -icount policy ────────────────────────────────────────────────────────────
+# Instruction-driven guest time on the Xtensa machines is opt-in per run,
+# because it makes the boot ~3x slower (MicroPython banner at 20 s with
+# shift 4, 35 s with shift 3, 7 s without). What needs it: a MicroPython
+# single-wire sensor driver times its pulses in microseconds with 100 us
+# timeouts, and without -icount this guest reads a GPIO only every 40-90 us of
+# host time (each read exits into a Python callback), so a 26 us pulse cannot
+# be observed at all. Under -icount shift 4 a read costs ~0.9 us of guest time
+# and the DHT22 decoded 21/21 frames over 75 s (issue #291). Shift 5 halves the
+# boot again but its ~40 us per-frame hiccup flipped a '0' bit (checksum error).
+#
+# Arduino runs keep the fast boot: Adafruit's DHT.h counts reads and the
+# HC-SR04 echo is timed on the guest clock, both fine at host time. WiFi keeps
+# -icount off: the AP beacon timer runs on QEMU_CLOCK_REALTIME (issue #260).
+ICOUNT_SHIFT_C3 = 3
+ICOUNT_SHIFT_LINE_SENSORS = 4
+LINE_SENSOR_TYPES = ('dht22', 'hc-sr04')
+
+
+def icount_shift_for_run(machine: str, wifi_enabled: bool, sensors: list,
+                         firmware_is_upy: bool) -> int | None:
+    """The `-icount` shift for this run, or None to leave guest time on host time."""
+    if 'c3' in machine:
+        return ICOUNT_SHIFT_C3
+    if wifi_enabled or not firmware_is_upy:
+        return None
+    if not any(str(s.get('sensor_type', '')) in LINE_SENSOR_TYPES for s in sensors):
+        return None
+    return ICOUNT_SHIFT_LINE_SENSORS
+
+
 def main() -> None:  # noqa: C901  (complexity OK for inline worker)
     # ── 1. Read config from stdin ─────────────────────────────────────────────
     raw_cfg = sys.stdin.readline()
@@ -506,7 +560,8 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
         # `app.*` is not on sys.path; mirrors the esp32_i2c_slaves pattern
         # at the top of the file.
         try:
-            from app.services.esp32_flash_image import pad_to_flash_size  # type: ignore[import-not-found]
+            from app.services.esp32_flash_image import (  # type: ignore[import-not-found]
+                firmware_is_micropython, pad_to_flash_size)
         except ImportError:
             import importlib.util as _ilu, pathlib as _pl
             _spec = _ilu.spec_from_file_location(
@@ -516,7 +571,9 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
             _mod = _ilu.module_from_spec(_spec)  # type: ignore[arg-type]
             _spec.loader.exec_module(_mod)  # type: ignore[union-attr]
             pad_to_flash_size = _mod.pad_to_flash_size
+            firmware_is_micropython = _mod.firmware_is_micropython
         fw_bytes = pad_to_flash_size(base64.b64decode(firmware_b64))
+        firmware_is_upy = firmware_is_micropython(fw_bytes)
         tmp = tempfile.NamedTemporaryFile(suffix='.bin', delete=False)
         tmp.write(fw_bytes)
         tmp.close()
@@ -534,13 +591,19 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
         b'-drive', f'file={firmware_path},if=mtd,format=raw'.encode(),
     ]
 
-    # Deterministic instruction counting for stable timers.
-    # Required for ESP32-C3 boot (RISC-V needs deterministic timing).
-    # For ESP32 (Xtensa), -icount is NOT used: the WiFi AP beacon timer
-    # runs on QEMU_CLOCK_REALTIME, so decoupling virtual time from real
-    # time can cause beacon delivery issues on slow/virtualized hosts.
-    if 'c3' in machine:
-        args_list.extend([b'-icount', b'3'])
+    # Deterministic instruction counting for stable timers. Always on for the
+    # ESP32-C3 (RISC-V needs deterministic timing to boot); on the Xtensa
+    # machines only for the runs that need it, see icount_shift_for_run().
+    icount_shift = icount_shift_for_run(machine, wifi_enabled, initial_sensors, firmware_is_upy)
+    if icount_shift is not None:
+        args_list.extend([b'-icount', str(icount_shift).encode()])
+        if 'c3' not in machine:
+            _log(f'-icount {icount_shift}: MicroPython run with a line sensor, '
+                 'guest time is instruction-driven (boot takes ~3x longer)')
+    elif firmware_is_upy and wifi_enabled and any(
+            str(s.get('sensor_type', '')) in LINE_SENSOR_TYPES for s in initial_sensors):
+        _log('line sensor on a MicroPython run that uses WiFi: -icount stays off '
+             '(issue #260), so a pulse-timing driver will time out on it')
 
     # ── WiFi NIC (slirp user-mode networking) ──────────────────────────────
     # Always present on machines that model a radio — see wifi_nic_arg().
@@ -812,87 +875,121 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
     #   3. No changes to the dispatcher are needed
     _sync_handlers: list = []
 
-    def _dht22_build_payload(temperature: float, humidity: float) -> list[int]:
-        """Build 5-byte DHT22 data payload: [hum_H, hum_L, temp_H, temp_L, checksum]."""
-        hum = round(humidity * 10)
-        tmp = round(temperature * 10)
-        h_H = (hum >> 8) & 0xFF
-        h_L = hum & 0xFF
-        raw_t = ((-tmp) & 0x7FFF) | 0x8000 if tmp < 0 else tmp & 0x7FFF
-        t_H = (raw_t >> 8) & 0xFF
-        t_L = raw_t & 0xFF
-        chk = (h_H + h_L + t_H + t_L) & 0xFF
-        return [h_H, h_L, t_H, t_L, chk]
+    # ── DHT22 ────────────────────────────────────────────────────────────────
+    # The model is esp32_dht22.py (trigger, phases, guest-time pacing). This is
+    # the glue: the guest clock, the pad, the sync-handler shape, and a settle
+    # timer for drivers that stop reading before the tail of the frame is out.
+    try:
+        _qemu_clock_get_ns = lib.qemu_clock_get_ns
+        _qemu_clock_get_ns.restype = ctypes.c_int64
+        _qemu_clock_get_ns.argtypes = [ctypes.c_int]
+        _QEMU_CLOCK_VIRTUAL = 1  # enum QEMUClockType, qemu/timer.h
 
-    def _dht22_build_sync_phases(payload: list[int]) -> list[tuple[int, int]]:
-        """Build list of (sync_count, pin_value) phase transitions for DHT22.
+        def _guest_now_us() -> float:
+            """The guest's own clock, in us: what esp_timer / micros() count.
+            Instruction-driven under -icount (the C3, and the runs picked by
+            icount_shift_for_run), host time while the VM runs otherwise;
+            either way it is the clock the guest measures our pulses with."""
+            return _qemu_clock_get_ns(_QEMU_CLOCK_VIRTUAL) / 1000.0
+    except AttributeError:
+        _log('libqemu does not export qemu_clock_get_ns; DHT22 pacing uses host time')
 
-        Each entry means: after sync_count digitalRead() calls in this phase,
-        drive the pin to pin_value and advance to the next phase.
+        def _guest_now_us() -> float:
+            return time.perf_counter_ns() / 1000.0
 
-        The Adafruit DHT library decodes bits by comparing
-        highCycles > lowCycles — only RATIOS matter, not absolute values.
-        We use the raw µs values as sync counts to preserve correct ratios.
+    class _Dht22Handler:
+        """Sync-handler shape over a Dht22Reply: one step per GPIO_IN read."""
 
-        After the last data bit (40th bit HIGH→LOW), the firmware's
-        expectPulse() loop ends — no more syncs will arrive.  So we do
-        NOT add a trailing phase; cleanup happens immediately after the
-        last phase transition fires.
-        """
-        phases: list[tuple[int, int]] = []
-        # Preamble: LOW 80 syncs → drive HIGH
-        phases.append((80, 1))
-        # Preamble: HIGH 80 syncs → drive LOW
-        phases.append((80, 0))
-        # 40 data bits: LOW 50 syncs → HIGH, then HIGH (26 or 70) → LOW
-        for byte_val in payload:
-            for b in range(7, -1, -1):
-                bit = (byte_val >> b) & 1
-                phases.append((50, 1))              # LOW phase → drive HIGH
-                phases.append((70 if bit else 26, 0))  # HIGH phase → drive LOW
-        return phases
-
-    class DHT22SyncHandler:
-        """Drives the DHT22 waveform synchronously, one GPIO_IN read sync at a time.
-
-        Uses phase-based counting: each phase defines how many syncs to wait before
-        driving the pin to a new value.  The Adafruit DHT library decodes bits by
-        comparing highCycles vs lowCycles — only RATIOS matter, so raw µs values used
-        as sync counts preserve the correct bit decoding.
-        """
-        def __init__(self, gpio: int, slot: int, phases: list[tuple[int, int]]) -> None:
-            self._gpio        = gpio
-            self._slot        = slot
-            self._phases      = phases
-            self._phase_idx   = 0
-            self._count       = 0
-            self._total_syncs = 0
+        def __init__(self, reply, gpio: int, sensor: dict, how: str) -> None:
+            self.reply = reply
+            self._gpio = gpio
+            self._sensor = sensor
+            self._how = how
 
         def step(self) -> bool:
-            """Advance one sync tick.  Returns True when the handler is done."""
-            self._count += 1
-            if self._phase_idx >= len(self._phases):
-                return self._finish()
-            target, pin_value = self._phases[self._phase_idx]
-            if self._count >= target:
-                lib.qemu_picsimlab_set_pin(self._slot, pin_value)
-                self._total_syncs += self._count
-                self._count       = 0
-                self._phase_idx  += 1
-                if self._phase_idx >= len(self._phases):
-                    return self._finish()
+            if self.reply.done:
+                return True
+            if self.reply.step():
+                self._finish()
+                return True
             return False
 
-        def _finish(self) -> bool:
+        def _finish(self) -> None:
             with _sensors_lock:
-                sensor = _sensors.get(self._gpio)
-                if sensor:
-                    sensor['responding'] = False
-            _log(f'DHT22 sync respond done gpio={self._gpio} '
-                 f'total_syncs={self._total_syncs} phases={len(self._phases)}')
+                if self._sensor.get('_dht22_reply') is self.reply:
+                    self._sensor['responding'] = False
+            d = self.reply.diag()
+            _log(f'DHT22 frame done gpio={self._gpio} ({self._how}) {d}')
             _emit({'type': 'system', 'event': 'dht22_diag', 'gpio': self._gpio,
-                   'status': 'ok', 'total_syncs': self._total_syncs})
-            return True
+                   'status': 'ok', 'release': self._how, **d})
+
+    def _dht22_settle_later(reply, sensor: dict, gpio: int) -> None:
+        """A read-counting driver returns on the last falling edge and never
+        reads again, so the tail LOW would sit on the pad until the next start.
+        Once the guest has gone quiet, release the line from a host thread
+        under the BQL (which also keeps step() from running concurrently)."""
+        if _lock_iothread is None or _unlock_iothread is None:
+            return
+
+        def _settle(last_reads: int) -> None:
+            if _stopped.is_set() or reply.done:
+                return
+            with _sensors_lock:
+                if sensor.get('_dht22_reply') is not reply:
+                    return
+            if reply.reads != last_reads:
+                # The guest is still polling: the frame is in progress. Under
+                # -icount a frame is ~3000 reads at ~90 us of host time each,
+                # so "quiet" is measured in reads, never in host time.
+                _later(reply.reads)
+                return
+            _lock_iothread(b'esp32_worker.py:dht22_settle', 0)
+            try:
+                acted = reply.settle()
+            finally:
+                _unlock_iothread()
+            if acted:
+                with _sensors_lock:
+                    if sensor.get('_dht22_reply') is reply:
+                        sensor['responding'] = False
+                _log(f'DHT22 line released by the settle timer gpio={gpio} '
+                     f'phase={reply.phase} {reply.diag()}')
+
+        def _later(last_reads: int) -> None:
+            t = threading.Timer(0.03, _settle, args=(last_reads,))
+            t.daemon = True
+            t.start()
+
+        _later(reply.reads)
+
+    def _dht22_trigger(sensor: dict):
+        trig = sensor.get('_dht22_trigger')
+        if trig is None:
+            trig = sensor['_dht22_trigger'] = _Dht22Trigger()
+        return trig
+
+    def _dht22_arm(gpio: int, slot: int, sensor: dict, how: str) -> None:
+        """Start a frame on `slot`. A frame still in flight is replaced: the
+        guest can only issue a new start after abandoning the previous read."""
+        temp = _dht22_num(sensor.get('temperature'), 25.0)
+        hum = _dht22_num(sensor.get('humidity'), 50.0)
+        payload = _dht22_payload_bytes(temp, hum)
+        old = sensor.get('_dht22_reply')
+        if old is not None and not old.done:
+            _sync_handlers[:] = [h for h in _sync_handlers
+                                 if getattr(h, 'reply', None) is not old]
+            _log(f'DHT22 frame restarted gpio={gpio} at phase {old.phase}')
+        reply = _Dht22Reply(
+            _dht22_phases(payload),
+            lambda level: lib.qemu_picsimlab_set_pin(slot, level),
+            _guest_now_us,
+        )
+        with _sensors_lock:
+            sensor['_dht22_reply'] = reply
+            sensor['responding'] = True
+        _sync_handlers.append(_Dht22Handler(reply, gpio, sensor, how))
+        _dht22_settle_later(reply, sensor, gpio)
+        _log(f'DHT22 armed ({how}) gpio={gpio} temp={temp} hum={hum} payload={payload}')
 
     class HCSR04SyncHandler:
         """Drives HC-SR04 ECHO pin synchronously from the QEMU GPIO_IN read callback.
@@ -911,12 +1008,12 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
 
           Phase 3 of pulseIn() (measure HIGH duration):
             Subsequent gpio_get_level() calls fire step().  We hold ECHO HIGH
-            until echo_us wall-clock µs have elapsed (perf_counter_ns), then
-            set LOW.  Virtual time ≈ wall-clock time (confirmed: 30 000 µs
-            pulseIn timeout = 30 ms wall-clock), so pulseIn() measures ≈ echo_us
-            virtual µs → correct distance.
+            until echo_us of GUEST time have elapsed (_guest_now_us: QEMU's
+            virtual clock, the one micros() / time_pulse_us read), then set
+            LOW.  Without -icount that clock is host time; under -icount it is
+            instruction-driven and host time would be off by 100x.
 
-        Guard: wall-clock timeouts replace step-count limits.  A step-count
+        Guard: guest-clock timeouts replace step-count limits.  A step-count
         guard is wrong because steps fire at rates that vary with QEMU load;
         using a fixed count would cut the pulse short for longer distances
         (100 cm = 5 800 µs, 200 cm = 11 600 µs) before elapsed_us is reached.
@@ -931,8 +1028,8 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
             self._echo_us       = echo_us
             self._state         = 'armed'
             self._total_steps   = 0
-            self._arm_start_ns  = time.perf_counter_ns()
-            self._echo_start_ns = 0
+            self._arm_start_us  = _guest_now_us()
+            self._echo_start_us = 0.0
 
         def step(self) -> bool:
             self._total_steps += 1
@@ -941,7 +1038,7 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
                 if self._total_steps <= self._SKIP_COUNT:
                     return False
                 # Check armed timeout (handler never entered 'high')
-                arm_us = (time.perf_counter_ns() - self._arm_start_ns) // 1000
+                arm_us = int(_guest_now_us() - self._arm_start_us)
                 if arm_us > self._ARMED_TIMEOUT_US:
                     _log(f'HCSR04 armed timeout trig={self._trig_gpio} '
                          f'arm_us={arm_us} steps={self._total_steps} — releasing')
@@ -957,12 +1054,12 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
                 _log(f'HCSR04 ECHO HIGH (sync) trig={self._trig_gpio} '
                      f'slot={self._echo_slot} echo_us={self._echo_us} '
                      f'armed_us={arm_us} skip={self._total_steps - 1}')
-                self._echo_start_ns = time.perf_counter_ns()
+                self._echo_start_us = _guest_now_us()
                 self._state = 'high'
                 return False
 
             elif self._state == 'high':
-                elapsed_us = (time.perf_counter_ns() - self._echo_start_ns) // 1000
+                elapsed_us = int(_guest_now_us() - self._echo_start_us)
                 if elapsed_us >= self._echo_us:
                     return self._finish(elapsed_us)
                 # Safety: don't hold ECHO past pulseIn() timeout
@@ -1056,11 +1153,13 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
         stype = sensor.get('type', '')
 
         if stype == 'dht22':
-            # Record that the firmware drove the pin LOW (start signal).
-            # The actual response is triggered from _on_dir_change when the
-            # firmware switches the pin to INPUT mode.
-            if value == 0 and not sensor.get('responding', False):
-                sensor['saw_low'] = True
+            # A level the guest wrote while the pad is an output (QEMU reports
+            # no others). The LOW is the start signal; a 1 after it is the
+            # open-drain release, how MicroPython's dht driver lets go of the
+            # line (issue #291). The push-pull release, pinMode(INPUT), arrives
+            # in _on_dir_change instead.
+            if _dht22_trigger(sensor).on_write(value & 1):
+                _dht22_arm(gpio, slot, sensor, 'open-drain release')
 
         elif stype == 'hc-sr04':
             # HC-SR04 trigger:
@@ -1125,7 +1224,7 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
                        'duty_pct': intensity})
             return
 
-        # ── DHT22: track direction changes + trigger sync response ───────
+        # ── DHT22: the push-pull release arrives as a direction change ───
         if slot >= 1:
             gpio = int(_PINMAP[slot]) if slot <= _GPIO_COUNT else slot
             # Matrix keypad: rows toggle OUTPUT(scan)/INPUT(idle) every pass,
@@ -1146,31 +1245,10 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
                     _keypad_recompute(_kp)
             with _sensors_lock:
                 sensor = _sensors.get(gpio)
-            if sensor is not None and sensor.get('type') == 'dht22':
-                if direction == 1:
-                    # OUTPUT mode — record timestamp for diagnostics
-                    sensor['dir_out_ns'] = time.perf_counter_ns()
-                elif direction == 0:
-                    # INPUT mode — trigger DHT22 sync-based response
-                    if sensor.get('saw_low', False) and not sensor.get('responding', False):
-                        sensor['saw_low'] = False
-                        sensor['responding'] = True
-
-                        # Build the response waveform phases
-                        temp = sensor.get('temperature', 25.0)
-                        hum = sensor.get('humidity', 50.0)
-                        payload = _dht22_build_payload(temp, hum)
-                        phases = _dht22_build_sync_phases(payload)
-
-                        # Drive pin LOW synchronously — firmware sees LOW
-                        # at its first digitalRead() in expectPulse().
-                        lib.qemu_picsimlab_set_pin(slot, 0)
-
-                        # Arm the sync-based response state machine
-                        _sync_handlers.append(DHT22SyncHandler(gpio, slot, phases))
-                        _log(f'DHT22 sync armed gpio={gpio} '
-                             f'temp={temp} hum={hum} '
-                             f'phases={len(phases)} payload={payload}')
+            if sensor is not None and sensor.get('type') == 'dht22' and direction in (0, 1):
+                # The push-pull release: the pad went INPUT after the LOW.
+                if _dht22_trigger(sensor).on_direction(direction == 1):
+                    _dht22_arm(gpio, slot, sensor, 'input release')
         gpio = int(_PINMAP[slot]) if 1 <= slot <= _GPIO_COUNT else slot
         _emit({'type': 'gpio_dir', 'pin': gpio, 'dir': direction})
 
