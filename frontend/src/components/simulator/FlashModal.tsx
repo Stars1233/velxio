@@ -64,7 +64,8 @@ interface Props {
 type ModalState =
   | { kind: 'loading-ports' }
   | { kind: 'picking'; ports: SerialPortInfo[]; selectedPath: string | null }
-  | { kind: 'web-ready' }
+  /** `downloaded`: the .uf2 just saved from this dialog (RP2 boards). */
+  | { kind: 'web-ready'; downloaded?: string }
   /** Web, no flasher for this kind, but a .uf2 to hand over (RP2 boards). */
   | { kind: 'download-only'; downloaded?: string }
   | { kind: 'compiling'; port: string | null; log: string[] }
@@ -306,8 +307,14 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
       board.boardKind,
     );
     downloadUf2(uf2, fileName);
-    setState({ kind: 'download-only', downloaded: fileName });
-  }, [board.boardKind, board.name, ensureProgram, hardwareProgram, t]);
+    // Back to the view this browser started from: a flasher-capable browser
+    // keeps its Connect & flash button, the download-only one its copy.
+    setState(
+      isWebMode
+        ? { kind: 'web-ready', downloaded: fileName }
+        : { kind: 'download-only', downloaded: fileName },
+    );
+  }, [board.boardKind, board.name, ensureProgram, hardwareProgram, isWebMode, t]);
 
   // ── Reboot into the bootloader (pro overlay backend, RP2 boards) ──
   const doEnterBootloader = useCallback(async () => {
@@ -500,6 +507,7 @@ export const FlashModal = ({ board: boardProp, fqbn, onClose }: Props) => {
             bootloader={bootloaderHint}
             bootStatus={bootStatus}
             onEnterBootloader={() => void doEnterBootloader()}
+            downloaded={state.downloaded}
           />
         )}
 
@@ -800,6 +808,8 @@ interface WebReadyProps {
   bootloader: BootloaderHint | null;
   bootStatus: BootStatus;
   onEnterBootloader: () => void;
+  /** File name of a .uf2 saved from this dialog, if any. */
+  downloaded?: string;
 }
 
 const WebReadyView = ({
@@ -809,6 +819,7 @@ const WebReadyView = ({
   bootloader,
   bootStatus,
   onEnterBootloader,
+  downloaded,
 }: WebReadyProps) => {
   const { t } = useTranslation();
   // MicroPython boards carry the 'micropython-loaded' sentinel instead of
@@ -837,6 +848,12 @@ const WebReadyView = ({
 
       {bootloader && (
         <BootloaderPanel hint={bootloader} status={bootStatus} onEnter={onEnterBootloader} />
+      )}
+
+      {downloaded && (
+        <div style={{ padding: 10, background: 'var(--color-feedback-success-soft)', color: 'var(--color-feedback-success)', borderRadius: 4, fontSize: 12, marginBottom: 12 }}>
+          {t('editor.flash.downloaded', { file: downloaded })}
+        </div>
       )}
 
       <div style={{ marginBottom: 12 }}>
