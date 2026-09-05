@@ -9,6 +9,7 @@ import {
   webFlashAvailable,
   webFlashMpyAvailable,
   webFlashBootloaderHint,
+  webFlashHardwareRevisions,
   isNotInBootloaderError,
   NotInBootloaderError,
   type WebFlashImpl,
@@ -100,5 +101,37 @@ describe('proWebFlash seam', () => {
     expect(isNotInBootloaderError(foreign)).toBe(true);
     expect(isNotInBootloaderError(new Error('port busy'))).toBe(false);
     expect(isNotInBootloaderError('nope')).toBe(false);
+  });
+
+  it('lists hardware revisions only when the impl declares more than one', () => {
+    expect(webFlashHardwareRevisions('stellar-unicorn')).toBeNull(); // no impl
+    installWebFlashImpl({
+      ...fakeImpl(() => true),
+      hardwareRevisions: (kind) =>
+        kind === 'stellar-unicorn'
+          ? [
+              { id: 'rp2350', label: 'Pico 2 W aboard', fqbn: 'rp2040:rp2040:rpipico2w:arch=riscv' },
+              { id: 'rp2040', label: 'Pico W aboard', fqbn: 'rp2040:rp2040:rpipicow' },
+            ]
+          : kind === 'raspberry-pi-pico'
+            ? [{ id: 'only', label: 'Pico', fqbn: 'rp2040:rp2040:rpipico' }]
+            : null,
+    });
+    expect(webFlashHardwareRevisions('stellar-unicorn')?.map((r) => r.id)).toEqual(['rp2350', 'rp2040']);
+    expect(webFlashHardwareRevisions('raspberry-pi-pico')).toBeNull(); // a single entry is no choice
+    expect(webFlashHardwareRevisions('esp32')).toBeNull();
+  });
+
+  it('swallows a throwing hardwareRevisions()', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    installWebFlashImpl({
+      ...fakeImpl(() => true),
+      hardwareRevisions: () => {
+        throw new Error('overlay bug');
+      },
+    });
+    expect(webFlashHardwareRevisions('stellar-unicorn')).toBeNull();
+    expect(warn).toHaveBeenCalled();
+    warn.mockRestore();
   });
 });

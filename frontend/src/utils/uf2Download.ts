@@ -61,3 +61,65 @@ export function downloadUf2(uf2Base64: string, fileName: string): void {
   // click handler returns and need the URL alive until then.
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+
+// ── File System Access: write the .uf2 onto the BOOTSEL drive ─────────────
+//
+// The bootloader's drive is a plain USB mass-storage volume, so a browser
+// with the File System Access API (Chromium) can write the file there
+// itself: no driver, no WebUSB claim. It is the route that still works for
+// an RP2040 on Windows before WinUSB is installed, and it costs the user a
+// directory picker instead of a file manager.
+
+type DirectoryPicker = (options?: { mode?: 'read' | 'readwrite'; id?: string }) => Promise<FileSystemDirectoryHandle>;
+
+function directoryPicker(): DirectoryPicker | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as unknown as { showDirectoryPicker?: DirectoryPicker };
+  return typeof w.showDirectoryPicker === 'function' ? w.showDirectoryPicker.bind(window) : null;
+}
+
+/** Whether this browser can write to the drive directly. */
+export function canSaveToDrive(): boolean {
+  return directoryPicker() !== null;
+}
+
+/** Thrown when the picked folder is not a BOOTSEL drive. */
+export class NotBootselDriveError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'NotBootselDriveError';
+  }
+}
+
+/**
+ * Ask for the drive (RPI-RP2 / RP2350), check it is one (every RP2
+ * bootloader drive carries INFO_UF2.TXT), and write the file. The chip
+ * reboots the instant the last block lands, which some hosts report as an
+ * error on close; a close() failure after a complete write is a success.
+ * Must be called from a user gesture (the picker needs one).
+ */
+export async function saveUf2ToDrive(
+  uf2Base64: string,
+  fileName: string,
+  pick: DirectoryPicker | null = directoryPicker(),
+): Promise<{ drive: string }> {
+  if (!pick) throw new Error('This browser cannot write to the drive directly.');
+  const dir = await pick({ mode: 'readwrite', id: 'velxio-bootsel' });
+  try {
+    await dir.getFileHandle('INFO_UF2.TXT');
+  } catch {
+    throw new NotBootselDriveError(
+      `"${dir.name}" is not a BOOTSEL drive (no INFO_UF2.TXT). Pick the RPI-RP2 or RP2350 drive.`,
+    );
+  }
+  const bytes = base64ToBytes(uf2Base64);
+  const handle = await dir.getFileHandle(fileName, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(bytes.buffer as ArrayBuffer);
+  try {
+    await writable.close();
+  } catch {
+    /* the board rebooted mid-close: the write itself completed */
+  }
+  return { drive: dir.name };
+}

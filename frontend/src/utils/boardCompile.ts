@@ -73,8 +73,19 @@ export function isCompiledProgramStale(board: BoardInstance): boolean {
 }
 
 export type BoardCompileOutcome =
-  | { ok: true; program: string; elapsedMs: number }
+  | { ok: true; program: string; uf2: string | null; elapsedMs: number }
   | { ok: false; error: string; elapsedMs: number };
+
+export interface BoardCompileOptions {
+  /** Build for this FQBN instead of the kind's own (a hardware revision). */
+  fqbn?: string;
+  /**
+   * Record the program on the board (default true). False for a build the
+   * simulator must not run, e.g. an RP2040 image for a board the emulator
+   * runs as RP2350: the caller keeps the result.
+   */
+  record?: boolean;
+}
 
 /**
  * Compile one board's sketch and record the program on the board (same
@@ -84,9 +95,10 @@ export type BoardCompileOutcome =
 export async function compileBoardForFlash(
   board: BoardInstance,
   onLine: (line: string) => void,
+  opts: BoardCompileOptions = {},
 ): Promise<BoardCompileOutcome> {
   const t0 = performance.now();
-  const fqbn = fqbnForLanguage(board.boardKind, board.languageMode);
+  const fqbn = opts.fqbn ?? fqbnForLanguage(board.boardKind, board.languageMode);
   if (!fqbn) {
     return { ok: false, error: `No FQBN for board kind: ${board.boardKind}`, elapsedMs: 0 };
   }
@@ -122,10 +134,13 @@ export async function compileBoardForFlash(
     if (!program) {
       return { ok: false, error: 'Compilation produced no program', elapsedMs };
     }
-    const sim = useSimulatorStore.getState();
-    sim.compileBoardProgram(board.id, program, { uf2: result.uf2_content ?? null });
-    if (result.has_wifi !== undefined) sim.updateBoard(board.id, { hasWifi: result.has_wifi });
-    return { ok: true, program, elapsedMs };
+    const uf2 = result.uf2_content ?? null;
+    if (opts.record !== false) {
+      const sim = useSimulatorStore.getState();
+      sim.compileBoardProgram(board.id, program, { uf2 });
+      if (result.has_wifi !== undefined) sim.updateBoard(board.id, { hasWifi: result.has_wifi });
+    }
+    return { ok: true, program, uf2, elapsedMs };
   } catch (err) {
     return {
       ok: false,

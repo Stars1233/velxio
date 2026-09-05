@@ -28,6 +28,12 @@ export interface WebFlashProgress {
 export interface WebFlashRequest {
   boardId: string;
   boardKind: string;
+  /**
+   * The FQBN the image was built with. Omitted = the kind's own FQBN; set
+   * when the user picked another hardware revision (see HardwareRevision),
+   * so the flasher checks the image against THAT chip.
+   */
+  fqbn?: string;
   /** The board's compiled program: base64 of the merged flash image. */
   binaryBase64: string;
   onProgress: (p: WebFlashProgress) => void;
@@ -91,6 +97,18 @@ export function isNotInBootloaderError(err: unknown): boolean {
   );
 }
 
+/**
+ * A real-board revision of a simulated kind that compiles differently.
+ * Pimoroni sold the Stellar and Galactic Unicorn with a Pico W (RP2040)
+ * before 2025 and with a Pico 2 W (RP2350) since; the simulator runs one
+ * of them, the flash dialog lets the user build for the one on the desk.
+ */
+export interface HardwareRevision {
+  id: string;
+  label: string;
+  fqbn: string;
+}
+
 export interface WebFlashImpl {
   /**
    * Whether this board kind can be flashed over Web Serial in this
@@ -133,6 +151,12 @@ export interface WebFlashImpl {
     boardKind: string,
     onProgress: (p: WebFlashProgress) => void,
   ): Promise<void>;
+  /**
+   * Hardware revisions of `boardKind` the user can pick in the flash
+   * dialog, first = the one the simulator runs. Optional; null / absent
+   * means the kind has exactly one real board.
+   */
+  hardwareRevisions?(boardKind: string): HardwareRevision[] | null;
 }
 
 let _impl: WebFlashImpl | null = null;
@@ -184,6 +208,19 @@ export function webFlashBootloaderHint(boardKind: string): BootloaderHint | null
   } catch (err) {
     // eslint-disable-next-line no-console
     console.warn('[oss] web-flash impl threw in bootloaderHint():', err);
+    return null;
+  }
+}
+
+/** The revisions the installed flasher lists for `boardKind`, or null. */
+export function webFlashHardwareRevisions(boardKind: string): HardwareRevision[] | null {
+  if (!_impl?.hardwareRevisions) return null;
+  try {
+    const list = _impl.hardwareRevisions(boardKind);
+    return list && list.length > 1 ? list : null;
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.warn('[oss] web-flash impl threw in hardwareRevisions():', err);
     return null;
   }
 }

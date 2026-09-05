@@ -459,7 +459,8 @@
       "log": {
         "compiling": "Compilation du sketch avant le flash...",
         "recompiling": "Le code a changé depuis la dernière compilation : recompilation avant le flash...",
-        "compiled": "Compilation OK en {{seconds}} s. Démarrage du flash..."
+        "compiled": "Compilation OK en {{seconds}} s. Démarrage du flash...",
+        "compilingRevision": "Compilation pour {{revision}} (flash seulement ; le simulateur garde sa propre compilation)..."
       },
       "downloadUf2": "Telecharger le .uf2",
       "downloadUf2Hint": "Vous preferez copier le fichier vous-meme ? Enregistrez le .uf2 et deposez-le sur le lecteur USB de la carte (RPI-RP2 ou RP2350).",
@@ -475,7 +476,10 @@
         "rebooting": "Redemarrage de la carte en mode bootloader...",
         "rebooted": "Termine. La carte est en mode bootloader : cliquez sur le bouton de flash.",
         "failed": "Impossible de redemarrer la carte : {{error}}"
-      }
+      },
+      "revision": "Revision de la carte reelle",
+      "saveToDrive": "Copier sur le lecteur de la carte",
+      "savedToDrive": "{{file}} copie sur {{drive}}. La carte redemarre avec votre sketch."
     }
   },
   "about": {

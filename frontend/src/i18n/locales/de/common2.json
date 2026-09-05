@@ -459,7 +459,8 @@
       "log": {
         "compiling": "Sketch wird vor dem Flashen kompiliert...",
         "recompiling": "Code seit dem letzten Build geändert: wird vor dem Flashen neu kompiliert...",
-        "compiled": "Build OK in {{seconds}} s. Flashen startet..."
+        "compiled": "Build OK in {{seconds}} s. Flashen startet...",
+        "compilingRevision": "Build fuer {{revision}} (nur zum Flashen; der Simulator behaelt seinen eigenen Build)..."
       },
       "downloadUf2": ".uf2 herunterladen",
       "downloadUf2Hint": "Lieber selbst kopieren? Speichere die .uf2 und lege sie auf das USB-Laufwerk des Boards (RPI-RP2 oder RP2350).",
@@ -475,7 +476,10 @@
         "rebooting": "Board wird in den Bootloader-Modus neu gestartet...",
         "rebooted": "Fertig. Das Board ist im Bootloader-Modus: klicke auf Flashen.",
         "failed": "Das Board konnte nicht neu gestartet werden: {{error}}"
-      }
+      },
+      "revision": "Revision des echten Boards",
+      "saveToDrive": "Auf das Laufwerk des Boards kopieren",
+      "savedToDrive": "{{file}} nach {{drive}} kopiert. Das Board startet mit deinem Sketch neu."
     }
   },
   "about": {

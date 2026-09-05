@@ -154,6 +154,12 @@ export interface BoardInstance {
    * the field existed.
    */
   compiledUf2?: string | null;
+  /**
+   * Hardware revision picked in the flash dialog (HardwareRevision.id),
+   * for kinds whose real board comes in more than one chip. Undefined =
+   * the one the simulator runs.
+   */
+  flashRevision?: string | null;
   serialOutput: string;
   serialBaudRate: number;
   serialMonitorOpen: boolean;
