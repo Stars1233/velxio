@@ -42,6 +42,30 @@ loader.config({ paths: { vs: monacoVsPath } });
 // right theme on <html> before the first paint; this keeps it there.
 initTheme();
 
+// Every deploy renames the hashed chunks and the old ones are gone from the
+// image. A tab opened before the deploy fails its next lazy import with
+// "Failed to fetch dynamically imported module" (seen on the flash dialog's
+// Rp2WebFlasher chunk right after a deploy). Vite raises this event first;
+// reloading once picks up the new index and its chunk names. The timestamp
+// guard keeps a genuinely missing chunk from reloading forever.
+window.addEventListener('vite:preloadError', (event) => {
+  const key = 'velxio-chunk-reload-at';
+  let last = 0;
+  try {
+    last = Number(sessionStorage.getItem(key) || 0);
+  } catch {
+    /* storage blocked: reload without the guard */
+  }
+  if (Date.now() - last < 60_000) return; // let the error surface the second time
+  try {
+    sessionStorage.setItem(key, String(Date.now()));
+  } catch {
+    /* ignore */
+  }
+  event.preventDefault();
+  window.location.reload();
+});
+
 createRoot(document.getElementById('root')!).render(<App />);
 
 // Tear down the Tauri-only splash now that React has mounted. Wait
