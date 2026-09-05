@@ -21,7 +21,7 @@ import { useElectricalStore } from '../../store/useElectricalStore';
 import { railVolts } from './boardPinGroups';
 
 /** ngspice messages that mean "no operating point at all", not a warning. */
-const HARD_ERROR_RE = /singular matrix|no such vector|circuit not parsed|error on line|fatal/i;
+const HARD_ERROR_RE = /singular matrix|shorted [av]src|no such vector|circuit not parsed|error on line|fatal/i;
 
 /** Name a V-source the way the user sees it on the canvas. */
 export function describeSourceName(src: string): string {
@@ -29,12 +29,54 @@ export function describeSourceName(src: string): string {
   if (s === 'v_vcc_rail') return "the board's main supply rail (5V / VCC / 3V3 pins)";
   const aux = /^v_aux_rail_(.+)$/.exec(s);
   if (aux) return `the board's ${railVolts(aux[1]!)} supply pin`;
-  return `source ${s}`;
+  // "b_ic_74hc02_1788636438540_69gm8vczj_1" -> the component id with the
+  // card suffix dropped; "v_bat" / "v_signal_generator_..." -> the id.
+  const body = s.replace(/^[vb]_/, '');
+  const comp = body.replace(/_(\d+|sense|esr|out|int|vmr)$/i, '');
+  return `source ${comp}`;
+}
+
+/**
+ * The line worth showing out of everything ngspice wrote to stderr for one
+ * analysis. A failed .op prints its fallbacks first ("Note: Starting dynamic
+ * gmin stepping", "Note: Starting source stepping") and the verdict last, so
+ * the FIRST line is nearly always a Note — day-one telemetry (2026-09-05)
+ * logged 25 dead solves as "Note: Starting dynamic gmin stepping" for one
+ * user, which hid what actually failed.
+ */
+export function pickSolverError(warnings: readonly string[]): string | null {
+  const lines = warnings.map((w) => w.trim()).filter((w) => w.length > 0);
+  if (lines.length === 0) return null;
+  const rank = (l: string): number => {
+    if (/^fatal|^error|singular matrix|shorted [av]src|no such vector|not parsed/i.test(l)) return 0;
+    if (/failed|iteration limit|no convergence|timestep too small|gmin.*fail/i.test(l)) return 1;
+    if (/^warning/i.test(l)) return 2;
+    return 3;
+  };
+  let best = lines[0]!;
+  let bestRank = rank(best);
+  for (const l of lines) {
+    const r = rank(l);
+    if (r < bestRank) {
+      best = l;
+      bestRank = r;
+    }
+  }
+  return best;
 }
 
 /** Turn a raw ngspice line into a sentence with a likely fix. */
 export function describeSolverError(raw: string): string {
   const text = raw.trim();
+  const shorted = /instance\s+(\S+)\s+is a shorted [av]src/i.exec(text);
+  if (shorted) {
+    return (
+      `The circuit has no solution: ${describeSourceName(shorted[1]!)} has both terminals ` +
+      `on the same net, so a wire shorts it out. Remove the wire that joins its output ` +
+      `to its own reference (typically an output tied straight to GND). Every meter and ` +
+      `LED stays dead until then. (ngspice: ${text})`
+    );
+  }
   const singular = /singular matrix:?\s*check node\s+(\S+?)#branch/i.exec(text);
   if (singular) {
     return (
