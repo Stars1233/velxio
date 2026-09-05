@@ -35,6 +35,7 @@ import { connectChipInputsToSolve } from './connectChipInputsToSolve';
 import { connectMcuEdgesToService } from './connectMcuEdgesToService';
 import { setElectricalResolveHook } from './electricalResolveHook';
 import { startAnalogScopeFeed } from './analogScopeFeed';
+import { startSolverFaultReporter } from './solverFaultReporter';
 import { collectPinStates } from './collectPinStates';
 
 /** Adapt useElectricalStore to the ElectricalStorePort. */
@@ -92,6 +93,9 @@ export function startSimulation(): () => void {
   // nothing until the user actually probes a wire: with no analog channel it
   // forces no transient and runs no timer.
   const unsubAnalogScope = startAnalogScopeFeed();
+  // A rejected deck (singular matrix) used to leave every meter at 0 V with
+  // no message anywhere; this puts the ngspice error in the output console.
+  const unsubFault = startSolverFaultReporter();
 
   // Let custom chips / WS boards request a re-solve when they toggle an
   // output pin. Trailing-throttled: callers of this hook are PER-EDGE sites
@@ -163,6 +167,7 @@ export function startSimulation(): () => void {
   return () => {
     setElectricalResolveHook(null);
     unsubAnalogScope();
+    unsubFault();
     if (trailingResolve !== null) {
       clearTimeout(trailingResolve);
       trailingResolve = null;

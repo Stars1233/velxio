@@ -160,6 +160,28 @@ function buildAcStatsI(samples: readonly number[]): ProbeAcStats {
   };
 }
 
+/** Shown when the solver rejected the circuit (ngspice error in the store). */
+export const SOLVER_ERROR_DISPLAY = '— solver error';
+/** Shown when the probe's nets exist but no solve has reported them yet. */
+export const NO_READING_DISPLAY = '— no reading';
+
+/** Node "0" is ground by definition and never appears in nodeVoltages. */
+function nodeVoltageOf(solve: ElectricalSolveResult, net: string): number | undefined {
+  if (net === '0') return 0;
+  const v = solve.nodeVoltages[net];
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+}
+
+function noReading(kind: ProbeKind, solve: ElectricalSolveResult): ProbeReading {
+  return {
+    kind,
+    value: 0,
+    unit: '—',
+    display: solve.error ? SOLVER_ERROR_DISPLAY : NO_READING_DISPLAY,
+    stale: true,
+  };
+}
+
 export function readVoltmeter(
   comp: ComponentForSpice,
   netLookup: (componentId: string, pinName: string) => string | null,
@@ -177,8 +199,15 @@ export function readVoltmeter(
       stale: true,
     };
   }
-  const vp = solve.nodeVoltages[plusNet] ?? 0;
-  const vm = solve.nodeVoltages[minusNet] ?? 0;
+  // A net the solver did not report is NOT 0 V. It means there is no
+  // operating point to read: ngspice rejected the deck (two ideal sources
+  // fighting over one node -> "singular matrix"), or no solve has landed
+  // yet. Printing "0.00 µV" there looks like a measurement — the 2026-09-05
+  // report was a 9 V cell "reading 0 V" while the whole canvas was unsolved
+  // because a regulator output was wired into the board's 5V pin.
+  const vp = nodeVoltageOf(solve, plusNet);
+  const vm = nodeVoltageOf(solve, minusNet);
+  if (vp === undefined || vm === undefined) return noReading('voltmeter', solve);
   const diff = vp - vm;
   const fmt = formatV(diff);
 
@@ -219,7 +248,11 @@ export function readAmmeter(
 ): ProbeReading {
   const key = `v_${comp.id}_sense`;
   const i = solve.branchCurrents[key];
-  if (i == null) {
+  if (i == null || !Number.isFinite(i)) {
+    // Same rule as the voltmeter: a missing branch after a solver error is
+    // "no solution", not 0 A. Without an error it is the sense source that
+    // never made it into the netlist (probe not wired into a loop).
+    if (solve.error) return noReading('ammeter', solve);
     return { kind: 'ammeter', value: 0, unit: '—', display: '— no sense reading', stale: true };
   }
   // Sign convention: like a bench DMM with the red lead on A+, a positive
