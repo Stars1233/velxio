@@ -4,6 +4,8 @@ toolchain or QEMU involvement — so they run anywhere pytest does.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from app.services.espidf_compiler import ESPIDFCompiler
@@ -504,3 +506,115 @@ def test_menu_override_default_keeps_boards_txt_value(
     base = {'board': 'ESP32C3_DEV', 'cdc_on_boot': False}
     assert compiler._apply_menu_overrides(base, {'CDCOnBoot': 'default'}) is base
     assert compiler._apply_menu_overrides(base, {}) is base
+
+
+# ── Warm build dir: managed components + configure inputs under main/ ──────
+#
+# The persistent build dir skips the cmake configure when build.ninja exists,
+# trusting ninja's RERUN_CMAKE rule to re-run it when an input changed. That
+# rule only lists the inputs the LAST configure saw, so a main/idf_component.yml
+# written for the first camera sketch in a dir is invisible to it: the managed
+# component is never fetched and the build dies on "esp_camera.h: No such file
+# or directory" right after logging that the dependency was declared
+# (2026-09-05, XIAO ESP32S3). These tests drive the prepare -> sync sequence
+# of consecutive builds in one dir.
+
+CAMERA_SKETCH = '#include "esp_camera.h"\nvoid setup() {}\nvoid loop() {}\n'
+BARE_SKETCH = '#include <WiFi.h>\nvoid setup() {}\nvoid loop() {}\n'
+_OLD_MTIME = 1_600_000_000
+
+
+def _prepare(tmp_path, monkeypatch, key: str = 'variant'):
+    from app.services import espidf_compiler as mod
+
+    monkeypatch.setattr(mod, '_BUILD_ROOT', tmp_path / 'build-root')
+    return mod._prepare_persistent_project_dir('esp32s3', key)
+
+
+def test_component_graph_token_marks_camera_sketch(compiler: ESPIDFCompiler) -> None:
+    assert compiler._component_graph_token(BARE_SKETCH) == ''
+    token = compiler._component_graph_token(CAMERA_SKETCH)
+    assert token.startswith('mc:espressif/esp32-camera')
+    # A commented-out include is not an include.
+    assert compiler._component_graph_token('// #include "esp_camera.h"\n') == ''
+
+
+def test_sync_managed_components_forces_configure_when_manifest_is_new(
+    compiler: ESPIDFCompiler, tmp_path, monkeypatch,
+) -> None:
+    camera = compiler._detect_managed_components(CAMERA_SKETCH)
+    assert camera == {'espressif/esp32-camera': '^2.0.4'}
+
+    # Build 1: a bare sketch configures the dir; no manifest anywhere.
+    project_dir = _prepare(tmp_path, monkeypatch)
+    manifest = project_dir / 'main' / 'idf_component.yml'
+    assert compiler._sync_managed_components(project_dir, {}) is False
+    assert not manifest.exists()
+
+    # Build 2: the first camera sketch in this dir. The manifest is new, so
+    # the configure must run explicitly - ninja does not know the file.
+    project_dir = _prepare(tmp_path, monkeypatch)
+    assert compiler._sync_managed_components(project_dir, camera) is True
+    assert 'espressif/esp32-camera: "^2.0.4"' in manifest.read_text(encoding='utf-8')
+    os.utime(manifest, (_OLD_MTIME, _OLD_MTIME))  # "the configure ran after this"
+
+    # Build 3: same camera sketch. Same bytes -> previous mtime handed back so
+    # ninja sees nothing new, and no forced configure.
+    project_dir = _prepare(tmp_path, monkeypatch)
+    assert not manifest.exists(), 'prepare restores main/ from the template'
+    assert compiler._sync_managed_components(project_dir, camera) is False
+    assert int(manifest.stat().st_mtime) == _OLD_MTIME
+
+    # Build 4: another registry component joins -> changed.
+    more = dict(camera, **{'lvgl/lvgl': '*'})
+    project_dir = _prepare(tmp_path, monkeypatch)
+    assert compiler._sync_managed_components(project_dir, more) is True
+    text = manifest.read_text(encoding='utf-8')
+    assert 'espressif/esp32-camera' in text and 'lvgl/lvgl' in text
+
+    # Build 5: a bare sketch again -> the manifest went away, changed.
+    project_dir = _prepare(tmp_path, monkeypatch)
+    assert compiler._sync_managed_components(project_dir, {}) is True
+    assert not manifest.exists()
+
+    # Build 6: still bare -> nothing changed.
+    project_dir = _prepare(tmp_path, monkeypatch)
+    assert compiler._sync_managed_components(project_dir, {}) is False
+
+
+def test_prepare_hands_back_main_cmake_mtime_when_unchanged(
+    tmp_path, monkeypatch,
+) -> None:
+    """main/CMakeLists.txt is patched per build (user_libs_all, IDF components).
+    Same bytes as the previous build must not look new to ninja, or every
+    warm variant with a library reconfigures on every build."""
+    from app.services import espidf_compiler as mod
+
+    project_dir = _prepare(tmp_path, monkeypatch)
+    cmake = project_dir / 'main' / 'CMakeLists.txt'
+    stash = project_dir / mod._MAIN_CMAKE_STASH
+    template_text = cmake.read_text(encoding='utf-8')
+    patched = template_text.replace(
+        'INCLUDE_DIRS "."', 'INCLUDE_DIRS "." "../user_libs/user_libs_all"', 1,
+    )
+    assert patched != template_text
+
+    # Build 1 patches the file; pretend the configure ran afterwards.
+    cmake.write_text(patched, encoding='utf-8')
+    os.utime(cmake, (_OLD_MTIME, _OLD_MTIME))
+    assert not stash.exists()
+
+    # Build 2: prepare stashes build 1's file, the template comes back fresh.
+    project_dir = _prepare(tmp_path, monkeypatch)
+    assert stash.read_text(encoding='utf-8') == patched
+    assert cmake.read_text(encoding='utf-8') == template_text
+    cmake.write_text(patched, encoding='utf-8')
+    assert int(cmake.stat().st_mtime) != _OLD_MTIME
+    assert mod._restore_mtime_if_unchanged(cmake, stash) is False
+    assert int(cmake.stat().st_mtime) == _OLD_MTIME
+
+    # Build 3: a different patch (an IDF component joined REQUIRES) IS new.
+    project_dir = _prepare(tmp_path, monkeypatch)
+    cmake.write_text(patched.replace('driver', 'driver esp_lcd', 1), encoding='utf-8')
+    assert mod._restore_mtime_if_unchanged(cmake, stash) is True
+    assert int(cmake.stat().st_mtime) != _OLD_MTIME

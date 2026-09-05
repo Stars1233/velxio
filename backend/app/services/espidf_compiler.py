@@ -696,6 +696,42 @@ _TARGET_SENTINEL_GUARD = threading.Lock()
 # the merge can hand the regenerated file its old mtime when the bytes are
 # identical (it is a configure dependency; a fresh mtime re-runs cmake).
 _USERLIBS_CMAKE_STASH = '.velxio-userlibs-cmake.prev'
+# The two configure inputs under main/ get the same treatment: prepare wipes
+# main/ and restores it from the template, so both come back with a fresh
+# mtime every build even when their bytes are the previous build's.
+_MAIN_CMAKE_STASH = '.velxio-main-cmake.prev'
+_MANIFEST_STASH = '.velxio-manifest.prev'
+
+
+def _stash_for_next_build(src: Path, stash: Path) -> None:
+    """Keep a copy of a configure input (bytes AND mtime) before main/ is
+    wiped, or drop the stale stash when the input did not exist this time."""
+    try:
+        if src.is_file():
+            shutil.copy2(src, stash)  # copy2 keeps the mtime
+        else:
+            stash.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _restore_mtime_if_unchanged(path: Path, stash: Path) -> bool:
+    """Give a regenerated configure input its previous mtime when its bytes
+    did not change, so ninja's RERUN_CMAKE rule does not see it as new.
+
+    Returns True when the bytes DIFFER from the stashed copy (or there was no
+    stash): the caller then knows the configure has to run.
+    """
+    try:
+        if not stash.is_file():
+            return True
+        if stash.read_text(encoding='utf-8') != path.read_text(encoding='utf-8'):
+            return True
+        st = stash.stat()
+        os.utime(path, (st.st_atime, st.st_mtime))
+        return False
+    except (OSError, UnicodeDecodeError):
+        return True
 
 
 def _prepare_persistent_project_dir(
@@ -749,14 +785,24 @@ def _prepare_persistent_project_dir(
         # copytree preserves the template's mtimes, so main/CMakeLists.txt
         # does NOT look new to ninja after this; the user's sources do, which
         # is exactly what has to recompile.
+        # Both configure inputs under main/ are regenerated per build (the
+        # CMakeLists patched for user_libs_all / IDF components, the managed
+        # components manifest written from the sketch's includes). Keep the
+        # previous build's copies so _compile_in_dir can hand back the old
+        # mtime when the bytes match - and force the configure when the
+        # manifest changed, which ninja cannot see (see _sync_managed_components).
+        _stash_for_next_build(
+            project_dir / 'main' / 'CMakeLists.txt', project_dir / _MAIN_CMAKE_STASH,
+        )
+        _stash_for_next_build(
+            project_dir / 'main' / 'idf_component.yml', project_dir / _MANIFEST_STASH,
+        )
         shutil.rmtree(project_dir / 'main', ignore_errors=True)
         shutil.copytree(_TEMPLATE_DIR / 'main', project_dir / 'main')
-        prev_cmake = project_dir / 'user_libs' / 'user_libs_all' / 'CMakeLists.txt'
-        stash = project_dir / _USERLIBS_CMAKE_STASH
-        if prev_cmake.is_file():
-            shutil.copy2(prev_cmake, stash)  # copy2 keeps the mtime
-        else:
-            stash.unlink(missing_ok=True)
+        _stash_for_next_build(
+            project_dir / 'user_libs' / 'user_libs_all' / 'CMakeLists.txt',
+            project_dir / _USERLIBS_CMAKE_STASH,
+        )
         shutil.rmtree(project_dir / 'user_libs', ignore_errors=True)
 
     # Mark this variant most-recently-used, then LRU-evict the coldest.
@@ -1353,7 +1399,7 @@ class ESPIDFCompiler:
         # Default to esp32 (Xtensa LX6) for the original ESP32 / ESP32-S2
         return 'esp32'
 
-    def _add_managed_components(self, project_dir: Path, deps: dict) -> None:
+    def _sync_managed_components(self, project_dir: Path, deps: dict) -> bool:
         """Declare extra ESP-IDF managed components for the `main` component.
 
         The template ships no idf_component.yml, so every managed component the
@@ -1361,19 +1407,53 @@ class ESPIDFCompiler:
         manifest. Anything it does not depend on has to be asked for explicitly;
         the component manager then fetches it into managed_components/ during the
         cmake configure and caches it in the build dir for later runs.
+
+        Returns True when the manifest differs from the previous build's in
+        this dir (created, removed, or other components). The caller MUST then
+        run the configure explicitly: the component manager only fetches during
+        a configure, and ninja's RERUN_CMAKE rule lists the manifests that
+        existed at the LAST configure - a manifest created after it is not an
+        input ninja knows about, so a warm dir would go straight to compiling
+        and die on "esp_camera.h: No such file or directory" with the
+        dependency declared right there in the log (2026-09-05, XIAO ESP32S3).
+        When the bytes match, the manifest gets its previous mtime back so a
+        warm camera variant skips the configure like a bare one does.
         """
-        if not deps:
-            return
         manifest = project_dir / 'main' / 'idf_component.yml'
+        stash = project_dir / _MANIFEST_STASH
+        if not deps:
+            # prepare restored main/ from the template, which ships no
+            # manifest; one present here is the user's own (pure-IDF mode
+            # writes their files into main/ by name). Report whether the
+            # previous build's manifest differs from this one, or existed.
+            if manifest.is_file():
+                return _restore_mtime_if_unchanged(manifest, stash)
+            return stash.is_file()
         lines = ['# Auto-generated by Velxio — components the sketch needs that the',
                  '# Arduino core does not pull in by itself.',
                  'dependencies:']
-        for name, version in deps.items():
-            lines.append(f'  {name}: "{version}"')
+        for name in sorted(deps):
+            lines.append(f'  {name}: "{deps[name]}"')
         manifest.write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        changed = _restore_mtime_if_unchanged(manifest, stash)
         logger.info(
-            '[espidf] Declared managed components: %s', ', '.join(sorted(deps))
+            '[espidf] Declared managed components: %s%s',
+            ', '.join(sorted(deps)),
+            ' (new for this build dir; configure required)' if changed else '',
         )
+        return changed
+
+    def _component_graph_token(self, code: str) -> str:
+        """Components the sketch pulls into the ESP-IDF graph by #include:
+        registry (managed) components and IDF-tree components main must
+        REQUIRE. Folded into the build-dir identity so a camera sketch never
+        shares a configured build/ with a bare one; '' when there are none,
+        which keeps every existing variant's hash as it was."""
+        managed = sorted(self._detect_managed_components(code))
+        idf_comps = sorted(self._detect_idf_components(code))
+        if not managed and not idf_comps:
+            return ''
+        return 'mc:' + ','.join(managed) + '|ic:' + ','.join(idf_comps)
 
     # include -> managed component (name, version). Each of these headers
     # ships in a registry component that neither the template nor
@@ -1406,8 +1486,17 @@ class ESPIDFCompiler:
         (r'esp_lvgl_port\.h', 'espressif/esp_lvgl_port', '*'),
     )
 
+    def _strip_comments(self, code: str) -> str:
+        """A commented-out #include is not an include (same rule the library
+        scanner applies); without this a `// #include "esp_camera.h"` left in
+        a sketch fetched the camera component and, now, cost the sketch its
+        own build variant."""
+        code = self._PP_COMMENT_BLOCK_RE.sub(' ', code)
+        return self._PP_COMMENT_LINE_RE.sub(' ', code)
+
     def _detect_managed_components(self, code: str) -> dict:
         """Managed components the source explicitly #includes."""
+        code = self._strip_comments(code)
         deps: dict[str, str] = {}
         for pattern, name, version in self._MANAGED_COMPONENT_INCLUDES:
             if re.search(r'#include\s*[<"]' + pattern + r'[">]', code):
@@ -1434,6 +1523,7 @@ class ESPIDFCompiler:
 
     def _detect_idf_components(self, code: str) -> list[str]:
         """IDF-tree components the source #includes, that exist in this IDF."""
+        code = self._strip_comments(code)
         wanted: list[str] = []
         for pattern, comp in self._IDF_COMPONENT_INCLUDES:
             if comp in wanted:
@@ -2758,13 +2848,9 @@ class ESPIDFCompiler:
         # mtimes, and this file is the only one ninja would see as new. Give
         # it back its previous mtime when the bytes did not change, so a warm
         # variant with libraries skips the configure like a bare one does.
-        stash = comp_dir.parent.parent / _USERLIBS_CMAKE_STASH
-        try:
-            if stash.is_file() and stash.read_text(encoding='utf-8') == cmake_content:
-                st = stash.stat()
-                os.utime(cmake_path, (st.st_atime, st.st_mtime))
-        except OSError:
-            pass
+        _restore_mtime_if_unchanged(
+            cmake_path, comp_dir.parent.parent / _USERLIBS_CMAKE_STASH,
+        )
         logger.info(
             f'[espidf] user_libs_all: {len(cpp_files)} source files, '
             f'{len(header_to_comp)} resolved headers'
@@ -4616,6 +4702,16 @@ class ESPIDFCompiler:
             h for h in set(self._detect_external_includes(_sketch_text, _own_names))
             if h not in _core_hdrs
         ))
+        # esp_camera.h and friends never reach _ext_inc_token (the esp_ prefix
+        # marks IDF-internal headers), yet they change the component graph:
+        # the manifest they add pulls a registry component into the build.
+        # Give those sketches their own variant, the same way a different
+        # library set gets one. Empty for the common sketch, on purpose, so
+        # every existing warm variant keeps its hash across this change.
+        _components_token = self._component_graph_token('\n'.join(
+            str(f.get('content', '')) for f in files
+            if str(f.get('name', '')).endswith(('.ino', '.cpp', '.c', '.h', '.hpp'))
+        ))
 
         # Per-compile mode decision (see _use_idf5). Decided HERE — not in
         # _compile_in_dir — because it picks the IDF major, which everything
@@ -4680,6 +4776,7 @@ class ESPIDFCompiler:
                     # share a configured build/ (stale objects + cmake cache).
                     + f'|libroots:{int(_PER_LIB_ROOTS)}'
                     + _lang_token
+                    + (f'|c:{_components_token}' if _components_token else '')
                 ).encode()
             ).hexdigest()[:12]
             try:
@@ -4937,6 +5034,8 @@ class ESPIDFCompiler:
         # ("needed by build.ninja, missing"), so that case must run cmake
         # explicitly. First build of a variant has no build.ninja anyway.
         force_configure = prev_defaults is not None and prev_defaults != rendered_sdkconfig
+        # Set by _sync_managed_components below (one call per mode branch).
+        manifest_changed = False
 
 
         # ESP-IDF only SEEDS sdkconfig from sdkconfig.defaults when sdkconfig is
@@ -5087,9 +5186,9 @@ class ESPIDFCompiler:
                     ('.ino', '.cpp', '.c', '.h', '.hpp')
                 )
             )
-            managed_pure = self._detect_managed_components(pure_src)
-            if managed_pure:
-                self._add_managed_components(project_dir, managed_pure)
+            manifest_changed = self._sync_managed_components(
+                project_dir, self._detect_managed_components(pure_src),
+            )
         elif arduino_mode:
             # Arduino-as-component mode: copy sketch as .cpp
             sketch_cpp = project_dir / 'main' / 'sketch.ino.cpp'
@@ -5222,9 +5321,9 @@ class ESPIDFCompiler:
                     ('.ino', '.cpp', '.c', '.h', '.hpp')
                 )
             )
-            managed = self._detect_managed_components(sketch_src)
-            if managed:
-                self._add_managed_components(project_dir, managed)
+            manifest_changed = self._sync_managed_components(
+                project_dir, self._detect_managed_components(sketch_src),
+            )
 
             # Same idea for components that live in the IDF tree rather than the
             # registry: they need to be in main's REQUIRES or the sketch cannot
@@ -5264,9 +5363,9 @@ class ESPIDFCompiler:
                     ('.ino', '.cpp', '.c', '.h', '.hpp')
                 )
             )
-            managed_idf = self._detect_managed_components(idf_src)
-            if managed_idf:
-                self._add_managed_components(project_dir, managed_idf)
+            manifest_changed = self._sync_managed_components(
+                project_dir, self._detect_managed_components(idf_src),
+            )
 
             if self._contains_app_main(main_content):
                 # The user's code is already a plain ESP-IDF program —
@@ -5312,6 +5411,19 @@ class ESPIDFCompiler:
         build_dir = project_dir / 'build'
         build_dir.mkdir(exist_ok=True)
 
+        # main/CMakeLists.txt is a configure input too. It came back from the
+        # template at prepare and was patched above (user_libs_all, IDF
+        # components), so its bytes usually equal the previous build's while
+        # its mtime says "new" - and ninja then re-runs the whole configure.
+        # Measured 2026-09-05 on the prod volume: every warm variant with a
+        # library reconfigured on every build (build.ninja 20-40 s younger
+        # than the freshly patched file), so the warm skip only ever paid off
+        # for bare sketches. Hand the file its previous mtime when unchanged.
+        # This runs BEFORE the source-set bump below so that bump still wins.
+        _restore_mtime_if_unchanged(
+            project_dir / 'main' / 'CMakeLists.txt', project_dir / _MAIN_CMAKE_STASH,
+        )
+
         # The template's main/CMakeLists.txt globs main/*.c and *.cpp without
         # CONFIGURE_DEPENDS (ESP-IDF evaluates component CMakeLists in script
         # mode, where it is rejected), so cmake only re-globs on a configure.
@@ -5344,6 +5456,14 @@ class ESPIDFCompiler:
         # components' manifests). Measured 2026-09-04: the configure was 18 of
         # the 25 s of a warm esp32 build under load, and ninja then ran ~10
         # steps. VELXIO_ESPIDF_ALWAYS_CONFIGURE=1 restores the old behaviour.
+        #
+        # Ninja only knows the inputs the LAST configure saw. A main manifest
+        # that did not exist then (this sketch is the first in the dir to
+        # need a registry component) is invisible to it, so that case runs
+        # the configure explicitly; so does a manifest that went away, since
+        # a missing input is not something to rely on ninja regenerating.
+        if manifest_changed:
+            force_configure = True
         configure_skipped = (
             not _ALWAYS_CONFIGURE
             and not force_configure
