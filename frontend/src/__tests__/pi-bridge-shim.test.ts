@@ -53,6 +53,7 @@ import {
   piMainScript,
 } from '../store/useSimulatorStore';
 import { PiBridgeShim } from '../simulation/PiBridgeShim';
+import { registerPiBusOp } from '../lib/proBoardRegistry';
 import { avrUartTx, detectSimulatorKind } from '../simulation/customChips/simulatorBridges';
 import { VirtualBMP280, VirtualDS3231, VirtualPCF8574 } from '../simulation/I2CBusManager';
 import { PartSimulationRegistry } from '../simulation/parts';
@@ -206,6 +207,33 @@ describe('what the guest tells the canvas', () => {
     const gap = lineGaps().find((g) => g.code === 'no-adc');
     expect(gap?.pin).toBe(26);
     expect(gap?.why).toMatch(/MCP3008/);
+  });
+});
+
+describe('an op the grammar does not know', () => {
+  it('is answered by whoever registered it, with the board it came from', () => {
+    const { id, shim } = addPi();
+    const seen: Array<[string, string[]]> = [];
+    const off = registerPiBusOp('CAM', (boardId, tokens) => {
+      seen.push([boardId, tokens]);
+      return 'CAM_JPEG abcd';
+    });
+    expect(shim.answerBusLine('CAM SNAP 640 480 85')).toBe('CAM_JPEG abcd');
+    expect(seen).toEqual([[id, ['CAM', 'SNAP', '640', '480', '85']]]);
+    off();
+    expect(shim.answerBusLine('CAM SNAP 640 480 85')).toBeNull();
+  });
+
+  it('a built-in op is never handed over, and a handler that throws answers nothing', () => {
+    const { shim } = addPi();
+    const offI2c = registerPiBusOp('I2C', () => 'HIJACKED');
+    expect(shim.answerBusLine('I2C 1 68 RR 75 1')).toBe('I2C_ERR 1 68 nack');
+    offI2c();
+    const offBoom = registerPiBusOp('BOOM', () => {
+      throw new Error('no');
+    });
+    expect(shim.answerBusLine('BOOM 1')).toBeNull();
+    offBoom();
   });
 });
 

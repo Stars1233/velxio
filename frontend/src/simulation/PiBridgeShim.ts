@@ -60,7 +60,7 @@ import type { RaspberryPi3Bridge, PiBusTopology } from './RaspberryPi3Bridge';
 import type { LineSupport } from './line/LineHost';
 import { recordPartGap } from './line/requestLine';
 import { requestElectricalResolve } from './spice/electricalResolveHook';
-import { getBoardLineSupport } from '../lib/proBoardRegistry';
+import { getBoardLineSupport, getPiBusOp } from '../lib/proBoardRegistry';
 import type { OneWireByteMaster } from './oneWireHost';
 
 /** What the store tells the shim about its board, read fresh on every call. */
@@ -748,8 +748,20 @@ export class PiBridgeShim {
         this.setPinPull(pin, pull);
         return null;
       }
-      default:
-        return null;
+      default: {
+        // Not this grammar's: an overlay may answer it (registerPiBusOp). A
+        // handler that throws must not take the bus down with it.
+        const extra = parts[0] ? getPiBusOp(parts[0]) : undefined;
+        if (!extra) return null;
+        try {
+          return extra(this.boardId, parts);
+        } catch (e) {
+          // The op's name came off the wire: it stays out of the log line (a
+          // first argument is a format string to console.warn).
+          console.warn('[pi] a registered bus op failed:', e);
+          return null;
+        }
+      }
     }
   }
 
