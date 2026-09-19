@@ -303,6 +303,32 @@ export function getGuestSetup(kind: string): string | undefined {
   return registry.get(kind)?.guestSetup ?? guestSetups.get(kind);
 }
 
+// ── Extra request ops for a Linux board's guest ─────────────────────────
+//
+// A Linux guest asks the canvas for things through one grammar of request
+// lines (`I2C ...`, `SPI ...`, `W1 ...`), answered by the board's shim in the
+// browser whether the script runs in the tab or in a guest behind the relay.
+// The grammar is the open-source tree's; what hangs off a board is not always:
+// a camera on the CSI ribbon has no pins and no bus, and whoever provides the
+// camera needs a way to answer `CAM ...` without the shim learning what a
+// camera is. An op registered here is consulted for any first token the
+// built-in grammar does not know. Return the reply line, or null for none.
+export type PiBusOpHandler = (boardId: string, tokens: string[]) => string | null;
+
+const piBusOps = new Map<string, PiBusOpHandler>();
+
+/** Returns the function that removes it again. */
+export function registerPiBusOp(op: string, handler: PiBusOpHandler): () => void {
+  piBusOps.set(op, handler);
+  return () => {
+    if (piBusOps.get(op) === handler) piBusOps.delete(op);
+  };
+}
+
+export function getPiBusOp(op: string): PiBusOpHandler | undefined {
+  return piBusOps.get(op);
+}
+
 // ── Built-in peripheral attachment for boards the OSS tree already owns ──
 //
 // Same reasoning as the guest setups above: an overlay may need to wire
