@@ -468,6 +468,7 @@ UC8179_CMD_DEEP_SLEEP       = 0x07
 UC8179_CMD_DTM1             = 0x10   # previous/old buffer (ignored)
 UC8179_CMD_DISPLAY_REFRESH  = 0x12
 UC8179_CMD_DTM2             = 0x13   # current/new image (the visible one)
+UC8179_CMD_CDI              = 0x50   # VCOM and data interval: DDX[1:0] = data polarity
 UC8179_CMD_PARTIAL_WINDOW   = 0x90
 
 
@@ -494,6 +495,17 @@ class Uc8179EpaperSlave:
     refreshed_count: int = 0
     unknown_cmds: List[int] = field(default_factory=list)
     in_deep_sleep: bool = False
+    # CDI (0x50) DDX[0]: what a set bit means. 1 = white (the reset value, and
+    # what GxEPD2's 0x29 keeps), 0 = BLACK (Waveshare writes 0x10 and inverts
+    # its buffer for 0x13). Same rule, same vectors as the browser decoder
+    # (frontend Uc8179Decoder.ts): one stream must not render differently
+    # depending on which board drives the panel.
+    set_bit_is_white: bool = True
+    # Image bytes per plane since the last refresh: a picture sent to 0x10
+    # alone is one the controller never shows.
+    old_plane_bytes: int = 0
+    new_plane_bytes: int = 0
+    last_refresh_old_plane_only: bool = False
 
     def __post_init__(self) -> None:
         self.ram = bytearray([1] * (self.width * self.height))  # white
@@ -518,6 +530,9 @@ class Uc8179EpaperSlave:
         self._cx = 0
         self._cy = 0
         self.in_deep_sleep = False
+        self.set_bit_is_white = True
+        self.old_plane_bytes = 0
+        self.new_plane_bytes = 0
 
     def compose_frame(self) -> Frame:
         return Frame(self.width, self.height, bytes(self.ram))
@@ -537,6 +552,10 @@ class Uc8179EpaperSlave:
             return
         if cmd == UC8179_CMD_DISPLAY_REFRESH:
             self.refreshed_count += 1
+            self.last_refresh_old_plane_only = (
+                self.new_plane_bytes == 0 and self.old_plane_bytes > 0)
+            self.old_plane_bytes = 0
+            self.new_plane_bytes = 0
             frame = self.compose_frame()
             if self.on_flush:
                 try:
@@ -560,19 +579,28 @@ class Uc8179EpaperSlave:
             self._win_y0 = (p[4] << 8) | p[5]
             self._win_y1 = (p[6] << 8) | p[7]
             return
+        if cmd == UC8179_CMD_CDI and len(self._params) == 1:
+            self.set_bit_is_white = (byte & 0x01) == 0x01
+            return
+        if cmd == UC8179_CMD_DTM1:
+            self.old_plane_bytes += 1
+            return
         if cmd == UC8179_CMD_DTM2 and self._active_visible:
+            self.new_plane_bytes += 1
             self._write_image_byte(byte)
 
     def _write_image_byte(self, byte: int) -> None:
-        # 8 px, MSB = leftmost. bit=1 -> white(1), bit=0 -> black(0).
+        # 8 px, MSB = leftmost. What a set bit means is CDI DDX[0]'s call.
         w, h = self.width, self.height
+        white = self.set_bit_is_white
         cy = self._cy
         if 0 <= cy < h:
             base = cy * w
             for k in range(8):
                 x = self._cx + k
                 if self._win_x0 <= x <= self._win_x1 and 0 <= x < w:
-                    self.ram[base + x] = 1 if (byte & (0x80 >> k)) else 0
+                    is_set = bool(byte & (0x80 >> k))
+                    self.ram[base + x] = 1 if is_set == white else 0
         self._cx += 8
         if self._cx > self._win_x1:
             self._cx = self._win_x0

@@ -15,6 +15,7 @@
 import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { JSDOM } from 'jsdom';
 import { PartSimulationRegistry } from '../simulation/parts/PartSimulationRegistry';
+import { lineGaps, clearLineGaps } from '../simulation/line/requestLine';
 import {
   CMD_DATA_ENTRY_MODE,
   CMD_SET_RAMX_RANGE,
@@ -249,6 +250,45 @@ describe('EPaperPart — AVR hook integration', () => {
     expect(() => sim.spi.onByte(0xab)).not.toThrow();
   });
 
+  it('an SSD168x panel rests its BUSY pad LOW (the other vendor, the other polarity)', () => {
+    const sim = new FakeAvrSimulator();
+    const el = document.createElement('velxio-epaper') as HTMLElement;
+    el.setAttribute('panel-kind', 'epaper-1in54-bw');
+    document.body.appendChild(el);
+    cleanup = PartSimulationRegistry.get('epaper-1in54-bw')!.attachEvents!(
+      el, sim as never, (name: string) => (name === 'BUSY' ? 7 : null), 'epd-avr',
+    ) as () => void;
+    expect(sim.externalPinState.get(7)).toBe(false);
+  });
+
+  it('on the ESP32 lane the WORKER owns the BUSY pad: the part never drives it', () => {
+    // Two writers on one pin, and for an UltraChip panel they disagreed.
+    const driven: Array<[number, boolean]> = [];
+    type Update = (id: string, f: { width: number; height: number; b64: string; refreshMs: number }) => void;
+    const theBridge: { onEpaperUpdate: Update | null; sendSensorAttach: () => void; sendPinEvent: () => void } = {
+      onEpaperUpdate: null,
+      sendSensorAttach: () => {},
+      sendPinEvent: () => {},
+    };
+    const esp = {
+      pinManager: new FakePinManager(),
+      getBridge: () => theBridge,
+      registerSensor: () => true,
+      unregisterSensor: () => {},
+      setPinState: (pin: number, state: boolean) => driven.push([pin, state]),
+    };
+    const el = document.createElement('velxio-epaper') as HTMLElement;
+    el.setAttribute('panel-kind', 'epaper-7in5-bw');
+    document.body.appendChild(el);
+    cleanup = PartSimulationRegistry.get('epaper-7in5-bw')!.attachEvents!(
+      el, esp as never, (name: string) => (name === 'BUSY' ? 4 : 5), 'epd-esp',
+    ) as () => void;
+    // A frame the worker rendered: the element shows it, the pad is not ours.
+    theBridge.onEpaperUpdate!('epd-esp', { width: 8, height: 1, b64: btoa('\x01'.repeat(8)), refreshMs: 1 });
+    expect((el as unknown as { busy: boolean }).busy).toBe(true);
+    expect(driven).toEqual([]);
+  });
+
   it('does NOT feed bytes to the decoder while CS is HIGH (de-asserted)', () => {
     const sim = new FakeAvrSimulator();
     const el = document.createElement('velxio-epaper') as HTMLElement;
@@ -401,6 +441,81 @@ describe('EPaperPart on a board with an empty SPI slot (Raspberry Pi)', () => {
     // The refresh drove BUSY through the board's own setPinState, which on a
     // Pi is what reaches the guest's GPIO.input(BUSY).
     expect(sim.externalPinState.has(PIN_BUSY)).toBe(true);
+  });
+
+  it('an UltraChip panel rests its BUSY pad HIGH from the moment it is wired, and pulls it LOW to refresh', async () => {
+    const sim = new PiLikeSimulator();
+    const seen: boolean[] = [];
+    const realSet = sim.setPinState.bind(sim);
+    sim.setPinState = (pin: number, state: boolean) => {
+      if (pin === PIN_BUSY) seen.push(state);
+      realSet(pin, state);
+    };
+    const el = document.createElement('velxio-epaper') as HTMLElement;
+    el.setAttribute('panel-kind', 'epaper-7in5-bw');
+    el.setAttribute('refresh-ms', '5');
+    document.body.appendChild(el);
+    cleanup = PartSimulationRegistry.get('epaper-7in5-bw')!.attachEvents!(
+      el, sim as never, getPin, 'epd-pi',
+    ) as () => void;
+
+    // Waveshare's ReadBusy is `while (busy == 0)`: at rest the pad must read 1
+    // BEFORE any refresh, or that loop never ends.
+    expect(seen).toEqual([true]);
+
+    sim.pinManager.triggerPinChange(PIN_CS, false);
+    const feed = (value: number, dc: boolean) => {
+      sim.pinManager.triggerPinChange(PIN_DC, dc);
+      sim.spi.onByte!(value);
+    };
+    feed(0x13, false);
+    feed(0x00, true);
+    feed(0x12, false);
+    expect(seen).toEqual([true, false]); // busy = LOW
+    await new Promise((r) => setTimeout(r, 30));
+    expect(seen).toEqual([true, false, true]); // and back to rest
+  });
+
+  it('a picture sent to 0x10 only refreshes blank, and says why in the Circuit check', () => {
+    clearLineGaps();
+    const sim = new PiLikeSimulator();
+    const el = document.createElement('velxio-epaper') as HTMLElement;
+    el.setAttribute('panel-kind', 'epaper-7in5-bw');
+    el.setAttribute('refresh-ms', '1');
+    document.body.appendChild(el);
+    cleanup = PartSimulationRegistry.get('epaper-7in5-bw')!.attachEvents!(
+      el, sim as never, getPin, 'epd-pi',
+    ) as () => void;
+    sim.pinManager.triggerPinChange(PIN_CS, false);
+    const feed = (value: number, dc: boolean) => {
+      sim.pinManager.triggerPinChange(PIN_DC, dc);
+      sim.spi.onByte!(value);
+    };
+
+    feed(0x10, false);
+    for (const b of [0xff, 0x00, 0xff]) feed(b, true);
+    feed(0x12, false);
+    const gap = lineGaps().find((g) => g.componentId === 'epd-pi');
+    expect(gap?.code).toBe('epaper-old-plane-only');
+    expect(gap?.why).toMatch(/3 image bytes went to command 0x10 only/);
+    expect(gap?.why).toMatch(/0x13/);
+
+    // The next frame goes where the controller looks: the complaint goes away.
+    feed(0x13, false);
+    feed(0x00, true);
+    feed(0x12, false);
+    expect(lineGaps().find((g) => g.componentId === 'epd-pi')).toBeUndefined();
+  });
+
+  it('BUSY wired to a rail is left alone (a rail resolves to -1, not null)', () => {
+    const sim = new PiLikeSimulator();
+    const el = document.createElement('velxio-epaper') as HTMLElement;
+    el.setAttribute('panel-kind', 'epaper-7in5-bw');
+    document.body.appendChild(el);
+    cleanup = PartSimulationRegistry.get('epaper-7in5-bw')!.attachEvents!(
+      el, sim as never, (name: string) => (name === 'BUSY' ? -1 : getPin(name)), 'epd-pi',
+    ) as () => void;
+    expect(sim.externalPinState.has(-1)).toBe(false);
   });
 
   it('cleanup hands the slot back EMPTY, not as a function that does nothing', () => {

@@ -163,6 +163,43 @@ describe('what the guest tells the canvas', () => {
     expect(getBoardPinManager(id)?.getPinState(2)).toBe(true);
   });
 
+  it('a level a part drives is said again to a fresh guest and to a fresh browser engine', () => {
+    // A part attaches when it MOUNTS; the guest and the in-browser engine
+    // start later. An e-paper panel rests its BUSY pad HIGH from the moment it
+    // is wired: if nobody hears that, the pad reads 0 and a correct UltraChip
+    // driver waits forever for "not busy".
+    const { id, shim } = addPi();
+    const bridge = getBoardBridge(id) as unknown as { sent: Array<{ pin: number; state: boolean }> };
+    shim.setPinState(24, true);
+    bridge.sent.length = 0;
+
+    shim.startBusSync();
+    expect(bridge.sent).toEqual([{ pin: 24, state: true }]);
+    shim.stopBusSync();
+
+    const heard: Array<[number, boolean]> = [];
+    shim.instantAdapter = { onPinInput: (pin: number, state: boolean) => heard.push([pin, state]) } as never;
+    expect(heard).toEqual([[24, true]]);
+    shim.instantAdapter = null;
+  });
+
+  it("a pull's resting level is NOT replayed: it belongs to the run that programmed it", () => {
+    const { id, shim } = addPi();
+    const bridge = getBoardBridge(id) as unknown as { sent: Array<{ pin: number; state: boolean }> };
+    shim.answerBusLine('GPIO_SETUP 5 in pud_up');
+    bridge.sent.length = 0;
+    shim.startBusSync();
+    expect(bridge.sent).toEqual([]);
+    shim.stopBusSync();
+  });
+
+  it('a pull does not overwrite the level a part is driving on that pin', () => {
+    const { id, shim } = addPi();
+    shim.setPinState(24, true); // the panel's BUSY pad, at rest
+    shim.answerBusLine('GPIO_SETUP 24 in pud_down');
+    expect(getBoardPinManager(id)?.getPinState(24)).toBe(true);
+  });
+
   it('an analog part is refused with a no-adc gap, never silently accepted', () => {
     const { shim } = addPi();
     expect(shim.setAdcVoltage(26, 1.65)).toBe(false);

@@ -1,0 +1,68 @@
+{
+  "_comment": "Golden streams for the UC8179 / GD7965 mono e-paper controller, shared by the browser decoder (frontend/src/simulation/displays/Uc8179Decoder.ts, vitest) and the ESP32 lane's slave (backend/app/services/esp32_spi_slaves.py, pytest). One stream must not render differently depending on which board drives the panel. A step is one command byte (DC low) followed by its data bytes (DC high). 'rows' is the expected frame after the LAST refresh, one string per row, '#' = black, '.' = white. 'old_plane_only' is whether that refresh showed nothing of what was sent because the picture went to 0x10 (the PREVIOUS image) and none of it to 0x13.",
+  "width": 16,
+  "height": 2,
+  "vectors": [
+    {
+      "name": "GxEPD2: CDI 0x29 (DDX=01), a set bit is white, picture in 0x13",
+      "steps": [
+        { "cmd": 80, "data": [41, 7] },
+        { "cmd": 19, "data": [255, 0, 15, 240] },
+        { "cmd": 18, "data": [] }
+      ],
+      "rows": ["........########", "####........####"],
+      "old_plane_only": false
+    },
+    {
+      "name": "Waveshare: CDI 0x10 (DDX=00), a set bit is BLACK, so the driver inverts its buffer for 0x13",
+      "steps": [
+        { "cmd": 80, "data": [16, 7] },
+        { "cmd": 16, "data": [255, 0, 15, 240] },
+        { "cmd": 19, "data": [0, 255, 240, 15] },
+        { "cmd": 18, "data": [] }
+      ],
+      "rows": ["........########", "####........####"],
+      "old_plane_only": false
+    },
+    {
+      "name": "no CDI at all: the register's reset value is DDX=01, a set bit is white",
+      "steps": [
+        { "cmd": 19, "data": [255, 0, 15, 240] },
+        { "cmd": 18, "data": [] }
+      ],
+      "rows": ["........########", "####........####"],
+      "old_plane_only": false
+    },
+    {
+      "name": "a hand-written driver: the picture goes to 0x10 only, then refresh. The glass shows what 0x13 holds: nothing",
+      "steps": [
+        { "cmd": 80, "data": [16, 7] },
+        { "cmd": 16, "data": [255, 0, 15, 240] },
+        { "cmd": 18, "data": [] }
+      ],
+      "rows": ["................", "................"],
+      "old_plane_only": true
+    },
+    {
+      "name": "a refresh with nothing sent is a plain re-refresh, not a mistake",
+      "steps": [
+        { "cmd": 19, "data": [0, 0, 0, 0] },
+        { "cmd": 18, "data": [] },
+        { "cmd": 18, "data": [] }
+      ],
+      "rows": ["################", "################"],
+      "old_plane_only": false
+    },
+    {
+      "name": "the mistake is forgiven by the next correct frame",
+      "steps": [
+        { "cmd": 16, "data": [0, 0, 0, 0] },
+        { "cmd": 18, "data": [] },
+        { "cmd": 19, "data": [0, 255, 255, 0] },
+        { "cmd": 18, "data": [] }
+      ],
+      "rows": ["########........", "........########"],
+      "old_plane_only": false
+    }
+  ]
+}

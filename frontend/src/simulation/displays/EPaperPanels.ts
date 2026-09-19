@@ -10,6 +10,24 @@
 export type EPaperControllerFamily = 'ssd168x' | 'uc8159c' | 'uc8179';
 
 /**
+ * The level of the BUSY pad while the controller is busy, and at rest.
+ *
+ * The two vendors disagree, and a driver's wait loop is written for one of
+ * them. Solomon Systech (SSD168x) raises BUSY while it works: GxEPD2 waits
+ * `while (digitalRead(busy) == HIGH)`. UltraChip (UC8159c, UC8179 / GD7965)
+ * is the opposite, BUSY_N: LOW while it works and HIGH at rest, which is why
+ * Waveshare's 7.5" driver waits `while (busy == 0)`.
+ *
+ * The model used to pulse HIGH for every family. On an UltraChip panel that
+ * is a panel that reads "busy" forever at rest, so a CORRECT driver hung in
+ * its first wait and only an inverted one ran. The ESP32 lane's worker has
+ * always used these same levels (esp32_worker.py, `busy_idle_level`).
+ */
+export function busyLevels(family: EPaperControllerFamily): { busy: boolean; idle: boolean } {
+  return family === 'ssd168x' ? { busy: true, idle: false } : { busy: false, idle: true };
+}
+
+/**
  * Visible palette for a panel.
  *  - 'bw'   → black / white only (single 1-bit RAM plane)
  *  - 'bwr'  → black / white / red (two 1-bit RAM planes; red wins on compose)
@@ -32,7 +50,7 @@ export interface EPaperPanelConfig {
   bezelPx: number;
   /** FPC tail height (CSS px). */
   fpcStripPx: number;
-  /** Default refresh duration the emulator drives BUSY high for (ms). */
+  /** Default refresh duration the emulator holds BUSY at its busy level for (ms). */
   refreshMs: number;
   /** Controller family — picks the decoder. */
   controllerFamily: EPaperControllerFamily;
