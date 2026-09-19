@@ -2892,10 +2892,23 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
           // slave. No card -> clear any stale image from a previous run.
           const sdCard = components.find((c) => c.metadataId === 'microsd-card');
           // Overlay-registered boards can declare a BUILT-IN microSD on a
-          // shared SPI bus: attach it even without a card component, and tell
-          // the bridge to CS-gate it so it doesn't eat the display's pixel
-          // stream. A standalone card owns the bus -> no gating.
+          // shared SPI bus: attach it even without a card component.
           const builtInSdCs = getProBoard(board.boardKind)?.builtInSdCsPin;
+          // Which GPIO deselects the card. A card on the canvas is gated by
+          // the CS pin the user WIRED — the same walk the sensors above use,
+          // so a CS that reaches the board through a breadboard strip counts.
+          // Chip select is not a formality on this bus: a real card holds MISO
+          // in high-Z until its CS goes low, which is the only reason a
+          // display and a card can share SCK/MOSI/MISO at all. Leaving a
+          // standalone card permanently selected made it answer the display's
+          // pixel stream, and the screen went blank the moment a card was
+          // dropped on the canvas (issue #343) — with no wiring that could
+          // avoid it.
+          // An unwired CS keeps the old always-selected behaviour: on real
+          // hardware that pin would float and nothing would work, but there
+          // are saved projects that never wired it and do work here, and a
+          // card nobody shares a bus with is harmed by nothing.
+          const wiredSdCs = sdCard ? traceBoardGpio(traceState, sdCard.id, 'CS', boardId) : null;
           if (sdCard || builtInSdCs !== undefined) {
             try {
               // Uploads come from the card component when one is on the
@@ -2906,7 +2919,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
                 : decodeSdFiles(board.sdFiles);
               const image = buildProjectSdImage(useEditorStore.getState().files, uploaded);
               esp32Bridge.sdImageB64 = bytesToB64(image);
-              esp32Bridge.sdCsPin = sdCard ? undefined : builtInSdCs;
+              esp32Bridge.sdCsPin = sdCard ? (wiredSdCs ?? undefined) : builtInSdCs;
             } catch (e) {
               console.warn('[microsd] SD image build failed:', e);
               esp32Bridge.sdImageB64 = undefined;

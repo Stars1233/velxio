@@ -572,13 +572,25 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
 
     # microSD card (SD-over-SPI). The frontend builds a FAT16 image (auto-copied
     # project files + paid uploads) and ships it here; SdSpiSlave serves it
-    # synchronously over the SPI bus (returns MISO per byte). Single-device on
-    # the bus for now — CS gating is a later refinement.
+    # synchronously over the SPI bus (returns MISO per byte).
+    #
+    # `cs_pin` is the GPIO the card's CS is WIRED to, and the card only listens
+    # while it is low — which is the whole reason a display and a card can
+    # share SCK/MOSI/MISO. Without it the card answered every byte on the bus
+    # and the display went black the moment a card appeared on the canvas
+    # (issue #343). No cs_pin (CS left unwired) keeps the card permanently
+    # selected, which is what every project built before the gating existed
+    # relies on.
     _sd_slave = None
+    _sd_cs_pin = -1
+    _sd_selected = [True]  # list: the GPIO callback below rebinds it
     if sd_card_cfg and sd_card_cfg.get('image_b64'):
         try:
             _sd_slave = _SdSpiSlave(base64.b64decode(sd_card_cfg['image_b64']))
-            _log('[sd] microSD attached')
+            _sd_cs_pin = int(sd_card_cfg.get('cs_pin', -1))
+            # Deselected until the guest pulls CS low, as a real card is.
+            _sd_selected[0] = _sd_cs_pin < 0
+            _log(f'[sd] microSD attached (cs_pin={_sd_cs_pin if _sd_cs_pin >= 0 else "none"})')
         except Exception as _e:  # noqa: BLE001
             _log(f'[sd] failed to attach microSD: {_e!r}')
 
@@ -1406,6 +1418,17 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
                 except Exception as e:
                     _log(f'[custom-chip pin_watch] error: {e!r}')
 
+        # microSD: the card listens only while its CS is low. Raising CS ends
+        # the transaction, so a half-sent command frame dies with it instead of
+        # being completed by whatever the next device puts on the bus.
+        if _sd_slave is not None and gpio == _sd_cs_pin:
+            _sd_selected[0] = (value & 1) == 0
+            if not _sd_selected[0]:
+                try:
+                    _sd_slave.deselect()
+                except Exception as e:  # noqa: BLE001
+                    _log(f'[sd cs] error: {e!r}')
+
         # ePaper SSD168x: track DC / CS / RST pin states for every slave.
         # CS rising re-arms the next byte; CS falling activates the slave.
         # RST falling clears the controller's RAM (active LOW).
@@ -1823,7 +1846,7 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
                 return 0xFF
         # microSD — serve SD-over-SPI synchronously, returning the card's MISO
         # for this byte (the read path the firmware polls).
-        if _sd_slave is not None and op == 0x00:
+        if _sd_slave is not None and op == 0x00 and _sd_selected[0]:
             try:
                 return _sd_slave.transfer(mosi) & 0xFF
             except Exception as e:
@@ -1890,7 +1913,7 @@ def main() -> None:  # noqa: C901  (complexity OK for inline worker)
                 return
         # microSD — capture bulk write-only data (e.g. the 512-byte block sent
         # after CMD24). MISO is discarded on this path; the slave still advances.
-        if _sd_slave is not None:
+        if _sd_slave is not None and _sd_selected[0]:
             try:
                 for mb in data:
                     _sd_slave.feed(mb)

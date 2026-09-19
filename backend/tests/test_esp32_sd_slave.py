@@ -161,3 +161,36 @@ def test_loads_a_prebuilt_image():
     r1 = xfer(s, cmd(17, at(1)) + FF(520))
     assert bytes(r0[r0.index(0xFE) + 1 : r0.index(0xFE) + 513]) == block0
     assert bytes(r1[r1.index(0xFE) + 1 : r1.index(0xFE) + 513]) == block1
+
+
+def test_deselect_drops_a_half_sent_command():
+    """CS went high mid-frame: the rest of the bus is not this card's.
+
+    A display sharing SCK/MOSI with the card gets bytes that look exactly like
+    command payload. Before CS gating, those finished the card's frame and it
+    answered a command nobody sent (issue #343).
+    """
+    s = SdSpiSlave()
+    xfer(s, cmd(0) + FF(1))  # reach a known state
+    s.transfer(0x40 | 17)  # CMD17, first byte of six...
+    s.transfer(0x00)
+    s.deselect()  # ...and the host lets go of the bus here
+    # The display's traffic: 4 more bytes that would have completed the frame.
+    assert xfer(s, [0x00, 0x00, 0x02, 0x95] + FF(2)) == FF(6)
+
+
+def test_deselect_drops_a_reply_nobody_stayed_to_read():
+    s = SdSpiSlave()
+    xfer(s, cmd(0))  # R1 is queued, not yet clocked out
+    s.deselect()
+    assert xfer(s, FF(2)) == FF(2)  # gone, as MISO in high-Z is
+
+
+def test_deselect_is_not_a_reset():
+    """Deselecting a card does not un-initialise it."""
+    s = SdSpiSlave()
+    xfer(s, cmd(0) + FF(1))
+    xfer(s, cmd(55) + FF(1))
+    xfer(s, cmd(41) + FF(1))  # out of idle
+    s.deselect()
+    assert xfer(s, cmd(58) + FF(5))[6] == 0x00  # still ready, not idle again

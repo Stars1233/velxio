@@ -214,6 +214,19 @@ class SdSpiSlave:
 
         return reply
 
+    def deselect(self) -> None:
+        """CS went high: the host let go of the bus mid-transaction.
+
+        A real card stops driving MISO and never sees the rest, so a command
+        frame that was still being clocked in cannot be completed by bytes the
+        host meant for another device on the same wires, and a reply nobody
+        stayed to read is gone. The card's own state — idle bit, CRC mode, the
+        block it is streaming — survives, because deselecting does not reset a
+        card.
+        """
+        self._cmd = []
+        self._resp.clear()
+
     def feed(self, mosi: int) -> None:
         """Consume a write-only byte (bulk path) — MISO discarded."""
         self.transfer(mosi)

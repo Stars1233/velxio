@@ -210,7 +210,8 @@ export class Esp32Bridge {
 
   /** SD chip-select GPIO for a board with a BUILT-IN SD sharing the SPI bus —
    * the worker CS-gates the slave so it doesn't consume the display stream.
-   * Undefined for a standalone microsd-card component (owns the bus). */
+   * Undefined only when the card's CS was never wired to a GPIO — nothing to
+   * gate on, and it answers the whole bus as it always did. */
   sdCsPin: number | undefined = undefined;
 
   // Callbacks wired up by useSimulatorStore
