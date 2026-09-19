@@ -173,8 +173,25 @@ export class PiBridgeShim {
   pinManager: PinManager;
   onSerialData: ((ch: string) => void) | null = null;
   onPinChangeWithTime: ((pin: number, state: boolean, timeMs: number) => void) | null = null;
-  /** The in-browser engine's hooks, when one is running this board. */
-  instantAdapter: PiInstantAdapter | null = null;
+  private _instantAdapter: PiInstantAdapter | null = null;
+  /**
+   * The in-browser engine's hooks, when one is running this board.
+   *
+   * Installing one replays the levels the canvas is driving, for the reason
+   * `lineHost` replays its records: a part attaches when it MOUNTS and the
+   * engine starts later. An e-paper panel rests its BUSY pad HIGH from the
+   * moment it is wired; an engine that never heard that reads 0 and a correct
+   * UltraChip driver waits forever for "not busy".
+   */
+  set instantAdapter(adapter: PiInstantAdapter | null) {
+    this._instantAdapter = adapter;
+    if (!adapter?.onPinInput) return;
+    for (const [pin, state] of this.drivenLevels) adapter.onPinInput(pin, state);
+  }
+
+  get instantAdapter(): PiInstantAdapter | null {
+    return this._instantAdapter;
+  }
   private _lineHost: PiLineHost | null = null;
   /**
    * Where a line model runs in the in-browser lane, when one is installed.
@@ -205,6 +222,10 @@ export class PiBridgeShim {
   /** Line-contract records this board took, keyed by the record's anchor pin. */
   private readonly lineSensors = new Map<number, Record<string, unknown>>();
   private readonly adcWarned = new Set<number>();
+  /** The last level a PART drove on each pin (not a pull's resting level:
+   *  that belongs to the run that programmed the pull). Replayed to a fresh
+   *  guest and to a fresh in-browser engine. */
+  private readonly drivenLevels = new Map<number, boolean>();
   /** Bus-map sync with a relaying backend (see startBusSync). */
   private busTimer: ReturnType<typeof setInterval> | null = null;
   private busMapKey = '';
@@ -264,6 +285,13 @@ export class PiBridgeShim {
         Number(rec['pin']),
         rec,
       );
+    }
+    // Same story for a level: a panel that rested its BUSY pad HIGH when it
+    // was wired said so to a socket that was not open yet.
+    const bridge = this.bridge as Partial<RaspberryPi3Bridge>;
+    for (const [pin, state] of this.drivenLevels) {
+      bridge.sendPinEvent?.(pin, state);
+      bridge.setSensorState?.({ [`pin${pin}`]: state ? 1 : 0 });
     }
     this.busTimer = setInterval(() => this.busTick(), 250);
   }
@@ -332,6 +360,11 @@ export class PiBridgeShim {
    * mock RaspberryPi3Bridge build it with a handful of methods.
    */
   setPinState(pin: number, state: boolean): void {
+    this.drivenLevels.set(pin, state);
+    this.applyPinState(pin, state);
+  }
+
+  private applyPinState(pin: number, state: boolean): void {
     this.pinManager.triggerPinChange(pin, state, 'external');
     const bridge = this.bridge as Partial<RaspberryPi3Bridge>;
     bridge.sendPinEvent?.(pin, state);
@@ -347,8 +380,11 @@ export class PiBridgeShim {
    */
   setPinPull(pin: number, pull: 0 | 1 | 2): void {
     this.pinManager.setPinPull(pin, pull);
-    if (pull !== 0 && !this.pinManager.getOutputPins().has(pin)) {
-      this.setPinState(pin, pull === 1);
+    // Seeded, not remembered: a pull belongs to the script that programmed it,
+    // and replaying it into the next run would hold a pin at a level nothing
+    // on the canvas drives. A pin a part DOES drive keeps the part's level.
+    if (pull !== 0 && !this.pinManager.getOutputPins().has(pin) && !this.drivenLevels.has(pin)) {
+      this.applyPinState(pin, pull === 1);
     }
     requestElectricalResolve();
   }

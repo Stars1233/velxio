@@ -134,10 +134,14 @@ export async function verifyCircuit(
       // A board with no analog input refuses a pot or a joystick the same
       // way, but "will not answer" is the wrong sentence for it: the part is
       // fine, the pin cannot measure. Its `why` already names the converter.
+      // ...and an e-paper panel that refreshed blank is wired correctly and
+      // did answer: what is wrong is where the driver sent the picture.
       message:
         gap.code === 'no-adc'
           ? `${gap.sensorType} on GPIO ${gap.pin}: ${gap.why}`
-          : `${gap.sensorType} on GPIO ${gap.pin} will not answer here: ${gap.why}`,
+          : gap.code === 'epaper-old-plane-only'
+            ? `e-paper panel: ${gap.why}`
+            : `${gap.sensorType} on GPIO ${gap.pin} will not answer here: ${gap.why}`,
     });
   }
 

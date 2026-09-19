@@ -8,8 +8,10 @@
  *   - Subscribes to `bridge.onEpaperUpdate` (ESP32 backend renders).
  *   - Tracks DC + CS + RST pins via `pinManager.onPinChange`.
  *   - On flush: paints the latched framebuffer to the element's `<canvas>`
- *     via `putImageData()` (RAF-batched), drives BUSY HIGH for `refreshMs`,
- *     then back LOW so firmware busy-waits see realistic timing.
+ *     via `putImageData()` (RAF-batched) and holds BUSY at the controller's
+ *     BUSY level for `refreshMs`, so firmware busy-waits see realistic timing.
+ *     Which level that is depends on the vendor (`busyLevels`): HIGH on an
+ *     SSD168x, LOW on an UltraChip, whose pad rests HIGH.
  *
  * Per the plan in `C:\Users\David\.claude\plans\ahora-integrarlo-en-el-greedy-stearns.md`,
  * this is the only file that touches the simulator-specific surface — the
@@ -23,9 +25,11 @@ import {
   type UC8159cFrame,
   ACEP_PALETTE_RGB,
 } from '../displays/UC8159cDecoder';
-import { Uc8179Decoder } from '../displays/Uc8179Decoder';
-import { PANEL_CONFIGS, getPanelConfig, PANEL_IDS } from '../displays/EPaperPanels';
+import { Uc8179Decoder, type Uc8179Diagnostic } from '../displays/Uc8179Decoder';
+import { PANEL_CONFIGS, getPanelConfig, PANEL_IDS, busyLevels } from '../displays/EPaperPanels';
 import { RP2040Simulator } from '../RP2040Simulator';
+import { recordPartGap, releaseLineGap } from '../line/requestLine';
+import { useSimulatorStore, appendSimulatorNote } from '../../store/useSimulatorStore';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -98,6 +102,17 @@ function isEsp32Shim(sim: AnySimulator): sim is Esp32LikeSimulator {
   // test would send the panel down a backend path whose frames never come.
   if (s.simulatorKind === 'pi') return false;
   return typeof s.getBridge === 'function' && typeof s.registerSensor === 'function';
+}
+
+/** The board this panel is wired to, by any of its pins, or null. */
+function wiredBoardId(componentId: string): string | null {
+  const s = useSimulatorStore.getState();
+  for (const w of s.wires) {
+    const other =
+      w.start.componentId === componentId ? w.end : w.end.componentId === componentId ? w.start : null;
+    if (other && s.boards.some((b) => b.id === other.componentId)) return other.componentId;
+  }
+  return null;
 }
 
 /** Decode a base64 string to a Uint8Array. Used for ESP32 backend frames. */
@@ -195,17 +210,24 @@ const epaperSimulation = {
     cleanups.push(() => element.removeEventListener('canvas-ready', onCanvasReady));
 
     // ── BUSY pulse plumbing ──────────────────────────────────────────────
+    const levels = busyLevels(cfg.controllerFamily);
+    // On the ESP32 lane the WORKER owns the pad: it sets the idle level when
+    // the slave is created and pulses it around each refresh, with the same
+    // per-family levels. Driving it from here as well was two writers on one
+    // pin, and for an UltraChip panel they disagreed (this side said HIGH =
+    // busy, the worker said HIGH = idle).
+    const drivesBusyPad = !isEsp32Shim(simulator);
     let busyTimer: ReturnType<typeof setTimeout> | null = null;
     const setBusy = (state: boolean) => {
       (element as any).busy = state;
-      // Drive BUSY pin low (LOW = ready) or high (HIGH = refreshing).
+      if (!drivesBusyPad) return;
       const busyPin = getArduinoPinHelper(PIN_BUSY);
-      if (busyPin === null) return;
-      // Every board that can host a panel takes an external level through
-      // setPinState: the AVR and the RP2040 directly, the ESP32 shim by
-      // delegating to the backend (qemu_picsimlab_set_pin), the Raspberry Pi
-      // by forwarding it to the guest. One call, not a branch per family.
-      (simulator as any).setPinState?.(busyPin, state);
+      // Unwired, or wired to a rail (a rail resolves to -1, not null).
+      if (busyPin === null || busyPin < 0) return;
+      // Every board that hosts the decoder here takes an external level
+      // through setPinState: the AVR and the RP2040 directly, the Raspberry Pi
+      // by forwarding it to the guest. One call, not a branch per board.
+      (simulator as any).setPinState?.(busyPin, state ? levels.busy : levels.idle);
     };
 
     const pulseBusy = (ms: number) => {
@@ -219,6 +241,45 @@ const epaperSimulation = {
     cleanups.push(() => {
       if (busyTimer) clearTimeout(busyTimer);
     });
+    // The pad rests at the idle level from the moment the panel is wired, not
+    // from its first refresh: a driver's first act is to wait for "not busy",
+    // and on an UltraChip panel an undriven input reads 0, which means busy.
+    setBusy(false);
+
+    // ── What the refresh was made of (Circuit check + serial monitor) ────
+    let saidIt = false;
+    const onDiagnostic = (diagnostic: Uc8179Diagnostic) => {
+      if (!diagnostic) {
+        releaseLineGap(componentId);
+        saidIt = false;
+        return;
+      }
+      if (!saidIt) {
+        // Once, not per refresh: a driver that redraws in a loop would
+        // otherwise bury its own output under the same sentence.
+        saidIt = true;
+        const boardId = wiredBoardId(componentId);
+        if (boardId) {
+          appendSimulatorNote(
+            boardId,
+            `e-paper: the panel refreshed blank because the image was sent to command 0x10 only. ` +
+              `This controller (${cfg.controllerIc}) displays what is sent to 0x13; a real panel does the same.`,
+          );
+        }
+      }
+      recordPartGap({
+        sensorType: 'epaper',
+        pin: getArduinoPinHelper(PIN_CS) ?? -1,
+        componentId,
+        code: 'epaper-old-plane-only',
+        why:
+          `the panel refreshed blank: the ${diagnostic.oldPlaneBytes} image bytes went to command ` +
+          `0x10 only. On this controller (${cfg.controllerIc}) 0x10 is the PREVIOUS image and 0x13 ` +
+          `is the one it displays, so send the picture to 0x13 before 0x12 (Waveshare's driver ` +
+          `writes both). A real panel does the same.`,
+      });
+    };
+    cleanups.push(() => releaseLineGap(componentId));
 
     // ── RAF-batched flush ────────────────────────────────────────────────
     // Both decoder families produce {width, height, pixels: Uint8Array}.
@@ -258,7 +319,12 @@ const epaperSimulation = {
         cfg.controllerFamily === 'uc8159c'
           ? new UC8159cDecoder({ width: cfg.width, height: cfg.height, onFlush: onDecoderFlush })
           : cfg.controllerFamily === 'uc8179'
-            ? new Uc8179Decoder({ width: cfg.width, height: cfg.height, onFlush: onDecoderFlush })
+            ? new Uc8179Decoder({
+                width: cfg.width,
+                height: cfg.height,
+                onFlush: onDecoderFlush,
+                onDiagnostic,
+              })
             : new SSD168xDecoder({
                 width: cfg.width,
                 height: cfg.height,

@@ -1584,6 +1584,17 @@ export function appendHardwareSerial(boardId: string, chunk: string): void {
   appendSerial(boardId, chunk);
 }
 
+/**
+ * A line from the SIMULATOR, not from the firmware, in a board's serial
+ * monitor: a part explaining why what the person sees is what a real one
+ * would show (an e-paper that refreshed blank because the picture went to the
+ * wrong RAM plane). The Circuit check carries the same sentence, but it is
+ * read at the NEXT Run; this is read while the blank panel is on screen.
+ */
+export function appendSimulatorNote(boardId: string, text: string): void {
+  appendSerial(boardId, `\r\n[Velxio] ${text}\r\n`);
+}
+
 // ── Store ─────────────────────────────────────────────────────────────────
 export const useSimulatorStore = create<SimulatorState>((set, get) => {
   // Initialise runtime objects for the default board
