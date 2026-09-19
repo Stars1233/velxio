@@ -720,7 +720,9 @@ export class PiBridgeShim {
         try {
           return extra(this.boardId, parts);
         } catch (e) {
-          console.warn(`[pi] bus op ${parts[0]} failed:`, e);
+          // The op's name came off the wire: it stays out of the log line (a
+          // first argument is a format string to console.warn).
+          console.warn('[pi] a registered bus op failed:', e);
           return null;
         }
       }
