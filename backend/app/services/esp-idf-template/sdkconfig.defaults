@@ -60,3 +60,15 @@ CONFIG_BT_ENABLED=y
 CONFIG_BT_BLUEDROID_ENABLED=y
 CONFIG_BTDM_CTRL_MODE_BR_EDR_BLE=y
 CONFIG_BT_BLE_ENABLED=y
+
+# ── Core dump ────────────────────────────────────────────────────────────
+# Every partition scheme we emit reserves a `coredump` partition, because
+# arduino-esp32 does — all 40 of the CSVs it ships carry one. Reserving the
+# space while compiling the feature out is the worst of both: the flash is
+# spent and esp_core_dump_image_get() answers "nothing stored" forever. With
+# it enabled a sketch can read back the crash it just had, the way it does on
+# the silicon (issue #342). ELF format is what esp-coredump decodes.
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+CONFIG_ESP_COREDUMP_CHECKSUM_CRC32=y
+CONFIG_ESP_COREDUMP_MAX_TASKS_NUM=64

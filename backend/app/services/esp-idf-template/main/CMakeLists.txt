@@ -100,13 +100,24 @@ elseif(DEFINED ENV{ARDUINO_ESP32_PATH})
         "${CMAKE_CURRENT_LIST_DIR}/*.cpp"
         "${CMAKE_CURRENT_LIST_DIR}/*.c")
 
+    # No REQUIRES, and that is the point. ESP-IDF hands `main` a dependency on
+    # every component in the build — but project.cmake only does it "when user
+    # did not set REQUIRES/PRIV_REQUIRES manually". Naming any requirement here
+    # opts out of that and silently shrinks the IDF down to the named closure:
+    # a sketch that did nothing stranger than `#include <esp_core_dump.h>` died
+    # with "No such file or directory" though espcoredump was sitting compiled
+    # in the same build (issue #342). It was never about that one header —
+    # every component outside the list was equally unreachable, and a list we
+    # maintain by hand would only ever be as complete as the last bug report.
+    # Depending on everything is what a real Arduino-as-IDF-component project
+    # does, and what the pure-IDF branch above already relies on.
+    #
+    # `driver`, which used to be named here for the i2c_master_* / i2c_cmd_link_*
+    # symbols libesp32-camera.a's sccb.c wants at link time, comes in with the
+    # rest; the camera .a also carries its own REQUIRES below.
     idf_component_register(
         SRCS ${_user_srcs}
         INCLUDE_DIRS "." ${_cam_includes}
-        # `driver` brings in the i2c_master_* + i2c_cmd_link_* symbols
-        # libesp32-camera.a's sccb.c references at link time. arduino-esp32
-        # doesn't transitively expose it, so we name it here.
-        REQUIRES ${_arduino_comp_name} driver
     )
 
     # Link the precompiled libesp32-camera.a so esp_camera_init / fb_get
