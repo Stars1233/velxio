@@ -116,12 +116,27 @@ export function connectDigitalInputsToMcu(): () => void {
         if (!sourcedNets.has(net)) continue;
         const v = nodeVoltages[net];
         if (v == null) continue;
+        // A number the solver could not produce is not a level. ngspice hands
+        // back NaN / Infinity for a node whose transient step never converged,
+        // and a circuit full of relay coils gives it plenty of chances: an
+        // ideal switch, a flyback diode and 20 mH is a stiff little system. A
+        // NaN fails both threshold tests, so it used to fall through to the
+        // `prev ?? false` below and every input pin on the board went LOW in
+        // the same pass — which reads exactly like several buttons pressed at
+        // once, out of nowhere, and recovering by itself (issue #333). Hold
+        // what the pin already had and wait for a solve that means something.
+        if (!Number.isFinite(v)) continue;
         const stateKey = `${board.id}:${gpio}`;
         const prev = lastLevel.get(stateKey);
         let next: boolean;
         if (v >= V_HIGH) next = true;
         else if (v <= V_LOW) next = false;
-        else next = prev ?? false; // inside the hysteresis band — hold
+        else if (prev !== undefined) next = prev; // inside the band — hold
+        // A node sitting in the undefined band with no history is not
+        // something to have an opinion about: real silicon reads it as
+        // whatever its own input stage decides, and inventing a LOW here
+        // pushed a falling edge into the guest that no circuit asked for.
+        else continue;
         if (prev === next) continue;
         lastLevel.set(stateKey, next);
         sim.setPinState(gpio, next);
