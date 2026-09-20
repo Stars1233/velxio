@@ -922,6 +922,26 @@ def _stash_for_next_build(src: Path, stash: Path) -> None:
         pass
 
 
+_MAIN_INCLUDE_TOKEN = 'INCLUDE_DIRS "."'
+_USER_LIBS_INCLUDE_DIR = '"../user_libs/user_libs_all"'
+
+
+def main_cmake_with_user_libs(cmake_text: str) -> str:
+    """main/CMakeLists.txt with the merged library headers on main's include path.
+
+    INCLUDE_DIRS is the ONLY thing to add. main names no REQUIRES on purpose:
+    ESP-IDF then makes it depend on every component in the build, user_libs_all
+    included (project.cmake does that only "when user did not set
+    REQUIRES/PRIV_REQUIRES manually"). This function used to append
+    user_libs_all to a REQUIRES line; writing one back would shrink the IDF a
+    sketch can reach down to the named closure again, which is issue #342.
+    """
+    if _USER_LIBS_INCLUDE_DIR in cmake_text:
+        return cmake_text
+    return cmake_text.replace(
+        _MAIN_INCLUDE_TOKEN, f'{_MAIN_INCLUDE_TOKEN} {_USER_LIBS_INCLUDE_DIR}')
+
+
 def _restore_mtime_if_unchanged(path: Path, stash: Path) -> bool:
     """Give a regenerated configure input its previous mtime when its bytes
     did not change, so ninja's RERUN_CMAKE rule does not see it as new.
@@ -5585,26 +5605,15 @@ class ESPIDFCompiler:
                     speculative_out=speculative_out,
                 )
 
-            # Patch main/CMakeLists.txt — REQUIRES and INCLUDE_DIRS for user_libs_all.
+            # Patch main/CMakeLists.txt — INCLUDE_DIRS for user_libs_all.
             # The single merged component means one entry covers all external headers.
             if component_names:  # always ['user_libs_all'] when any lib was found
                 cmake_path = project_dir / 'main' / 'CMakeLists.txt'
-                cmake_text = cmake_path.read_text(encoding='utf-8')
-
-                for old_req in [r'REQUIRES ${_arduino_comp_name}', f'REQUIRES {arduino_comp_name}']:
-                    if old_req in cmake_text:
-                        cmake_text = cmake_text.replace(
-                            old_req, f'{old_req} user_libs_all'
-                        )
-                        break
-
-                cmake_text = cmake_text.replace(
-                    'INCLUDE_DIRS "."',
-                    'INCLUDE_DIRS "." "../user_libs/user_libs_all"',
+                cmake_path.write_text(
+                    main_cmake_with_user_libs(cmake_path.read_text(encoding='utf-8')),
+                    encoding='utf-8',
                 )
-
-                cmake_path.write_text(cmake_text, encoding='utf-8')
-                logger.info('[espidf] Patched main CMakeLists: REQUIRES += user_libs_all, INCLUDE_DIRS += user_libs_all')
+                logger.info('[espidf] Patched main CMakeLists: INCLUDE_DIRS += user_libs_all')
 
             # esp_camera.h used to come free: arduino-esp32 2.x shipped a precompiled
             # SDK with esp32-camera bundled under tools/sdk/<target>/include. The 3.x
@@ -5621,29 +5630,10 @@ class ESPIDFCompiler:
                 project_dir, self._detect_managed_components(sketch_src),
             )
 
-            # Same idea for components that live in the IDF tree rather than the
-            # registry: they need to be in main's REQUIRES or the sketch cannot
-            # see their headers.
-            idf_comps = self._detect_idf_components(sketch_src)
-            if idf_comps:
-                cmake_path = project_dir / 'main' / 'CMakeLists.txt'
-                cmake_text = cmake_path.read_text(encoding='utf-8')
-                missing = [c for c in idf_comps if c not in cmake_text]
-                if missing:
-                    for old_req in [
-                        r'REQUIRES ${_arduino_comp_name}',
-                        f'REQUIRES {arduino_comp_name}',
-                    ]:
-                        if old_req in cmake_text:
-                            cmake_text = cmake_text.replace(
-                                old_req, old_req + ' ' + ' '.join(missing), 1
-                            )
-                            cmake_path.write_text(cmake_text, encoding='utf-8')
-                            logger.info(
-                                f'[espidf] main REQUIRES += {" ".join(missing)} '
-                                '(IDF components the sketch includes)'
-                            )
-                            break
+            # Components that live in the IDF tree (esp_lcd, esp_mm...) need no
+            # line here any more: main names no REQUIRES, so it depends on every
+            # component in the build and their headers resolve on their own.
+            # _detect_idf_components still feeds the build-dir identity.
         else:
             # Pure ESP-IDF mode (no Arduino component usable for this
             # target). Remove Arduino main.cpp to avoid conflict.

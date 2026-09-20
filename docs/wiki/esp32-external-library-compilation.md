@@ -138,16 +138,21 @@ REQUIRES arduino-esp32 Adafruit_Unified_Sensor
 
 ### Main `CMakeLists.txt` Patching
 
-The template `main/CMakeLists.txt` uses a CMake variable:
+The template `main/CMakeLists.txt` names **no** `REQUIRES`, and the patch must
+never add one. ESP-IDF makes `main` depend on every component in the build
+(`user_libs_all` included) only "when user did not set REQUIRES/PRIV_REQUIRES
+manually"; a single named requirement shrinks what a sketch can reach down to
+that closure, which is how `#include <esp_core_dump.h>` stopped resolving
+(issue #342).
+
+So the Python patch (`main_cmake_with_user_libs`) adds one thing, the merged
+headers on main's include path:
 ```cmake
-REQUIRES ${_arduino_comp_name}
+INCLUDE_DIRS "." "../user_libs/user_libs_all"
 ```
 
-The Python patch looks for this exact string (not the resolved literal `arduino-esp32`)
-and appends the user library component names:
-```cmake
-REQUIRES ${_arduino_comp_name} DHT_sensor_library Adafruit_Unified_Sensor
-```
+Until 2026-09 the template carried `REQUIRES ${_arduino_comp_name} driver` and
+the patch appended the library components to it. Bug 3 below is from that era.
 
 ---
 
