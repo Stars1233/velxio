@@ -188,7 +188,7 @@ export interface BoardInstance {
   boardOptions?: import('./boardOptions').ESP32BoardOptions;
   spiffsFiles?: import('./boardOptions').SpiffsFile[];
   /** User uploads for a board's BUILT-IN microSD slot (a ProBoardDef with
-   *  builtInSdCsPin, e.g. the XIAO ESP32S3 Sense). Same shape the
+   *  builtInSd, e.g. the XIAO ESP32S3 Sense). Same shape the
    *  microsd-card component persists in properties.sdFiles, and consumed the
    *  same way: merged into buildProjectSdImage on Run, overriding same-named
    *  project files. Undefined for boards without a slot. */

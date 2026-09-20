@@ -3740,10 +3740,12 @@ export const SimulatorCanvas = ({ headerSlot }: SimulatorCanvasProps = {}) => {
                   defaultValues: {},
                   pinCount: boardPins?.length ?? 0,
                   tags: [],
-                  // A board with a BUILT-IN microSD slot (XIAO Sense) gets the
-                  // same SD Card upload panel a component slot gets; the files
-                  // live on board.sdFiles and feed the card image on Run.
-                  sdSlot: getProBoard(board.boardKind)?.builtInSdCsPin !== undefined,
+                  // A board with a BUILT-IN microSD slot (a XIAO Sense on SPI,
+                  // a P4 on SDMMC) gets the same SD Card upload panel a
+                  // component slot gets; the files live on board.sdFiles and
+                  // feed the card image on Run. The BUS is the bridge's
+                  // problem, not the panel's.
+                  sdSlot: getProBoard(board.boardKind)?.builtInSd !== undefined,
                 } as unknown as ComponentMetadata
               }
               componentProperties={{ sdFiles: board.sdFiles }}

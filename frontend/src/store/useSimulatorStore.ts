@@ -2960,9 +2960,12 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
           // it to the bridge so the QEMU worker can attach it as an SD-over-SPI
           // slave. No card -> clear any stale image from a previous run.
           const sdCard = components.find((c) => c.metadataId === 'microsd-card');
-          // Overlay-registered boards can declare a BUILT-IN microSD on a
-          // shared SPI bus: attach it even without a card component.
-          const builtInSdCs = getProBoard(board.boardKind)?.builtInSdCsPin;
+          // Overlay-registered boards can declare a BUILT-IN microSD slot:
+          // attach it even without a card component. A slot on the chip's own
+          // SDMMC controller (the P4's) has no chip select — only a slot that
+          // shares an SPI bus needs one, and only that one can be gated.
+          const builtInSd = getProBoard(board.boardKind)?.builtInSd;
+          const builtInSdCs = builtInSd?.bus === 'spi' ? builtInSd.csPin : undefined;
           // Which GPIO deselects the card. A card on the canvas is gated by
           // the CS pin the user WIRED — the same walk the sensors above use,
           // so a CS that reaches the board through a breadboard strip counts.
@@ -2978,7 +2981,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
           // are saved projects that never wired it and do work here, and a
           // card nobody shares a bus with is harmed by nothing.
           const wiredSdCs = sdCard ? traceBoardGpio(traceState, sdCard.id, 'CS', boardId) : null;
-          if (sdCard || builtInSdCs !== undefined) {
+          if (sdCard || builtInSd !== undefined) {
             try {
               // Uploads come from the card component when one is on the
               // canvas, else from the BOARD's own slot (board.sdFiles - the

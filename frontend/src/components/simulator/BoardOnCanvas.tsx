@@ -294,10 +294,10 @@ export const BoardOnCanvas = ({
       />
 
       {/* A board with a built-in microSD slot (XIAO Sense, M5Stack Core,
-          Cardputer): the visible way into the SD panel of its inspector,
-          which the right-click alone kept hidden from most people. Opens
-          the same board inspector, in every mode. */}
-      {getProBoard(boardKind)?.builtInSdCsPin !== undefined && onContextMenu && (
+          Cardputer, ESP32-P4): the visible way into the SD panel of its
+          inspector, which the right-click alone kept hidden from most
+          people. Opens the same board inspector, in every mode. */}
+      {getProBoard(boardKind)?.builtInSd !== undefined && onContextMenu && (
         <button
           type="button"
           className="velxio-part-shortcut"

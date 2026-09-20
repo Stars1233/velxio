@@ -45,6 +45,22 @@ export interface ProBoardSimulator {
   detachPioPeripheral?(): void;
 }
 
+/**
+ * A microSD slot the board carries itself.
+ *
+ * The BUS is what the host has to model. An SPI slot shares SCK/MOSI/MISO with
+ * whatever else sits on that bus, so the bridge needs the CS pin to know when
+ * the card is the one being addressed (a standalone SD component on the canvas
+ * still overrides this to un-gated). An SDMMC slot is its own controller with
+ * no chip select at all — declaring a CS pin for it would be a fiction, which
+ * is why this is a union and not an optional number.
+ *
+ * What both have in common is the part the user sees: a place to put files.
+ * That is why the board's properties panel offers the same upload panel a card
+ * component gets, and why the run path builds the card image either way.
+ */
+export type BuiltInSdSlot = { bus: 'spi'; csPin: number } | { bus: 'sdmmc' };
+
 export interface ProBoardDef {
   /** The board id — behaves like a BoardKind everywhere at runtime. */
   kind: string;
@@ -155,9 +171,8 @@ export interface ProBoardDef {
   /** Built-in bridge sensors registered without wiring (e.g. an on-board I2C
    *  keyboard): pushed into the ESP32 bridge's sensor config on every run. */
   builtInSensors?: Array<{ sensor_type: string; pin: number; addr?: number }>;
-  /** Built-in microSD on a shared SPI bus: the CS pin the bridge must gate.
-   *  (A standalone SD card component still overrides this to un-gated.) */
-  builtInSdCsPin?: number;
+  /** A microSD slot the board carries itself — see BuiltInSdSlot. */
+  builtInSd?: BuiltInSdSlot;
   /** Board carries an on-board microphone whose bridge implements
    *  setMicrophoneSource (I2S RX sample injection): shows the canvas-header
    *  Mic toggle that streams the computer's microphone into it. */

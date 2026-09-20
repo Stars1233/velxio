@@ -39,7 +39,7 @@ export interface ExampleBoard {
   /** Files pre-loaded into the Pi VFS (path → content). Only used for raspberry-pi-3. */
   vfsFiles?: Record<string, string>;
   /** Uploads pre-loaded onto a board's BUILT-IN microSD slot (a ProBoardDef
-   *  with builtInSdCsPin, e.g. the XIAO ESP32S3 Sense) — the same shape the
+   *  with builtInSd, e.g. the XIAO ESP32S3 Sense) — the same shape the
    *  SD Card panel persists on board.sdFiles. */
   sdFiles?: Array<{ name: string; contentB64: string }>;
 }
