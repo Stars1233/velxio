@@ -45,6 +45,9 @@ export class PinManager {
   // inputs read the right idle level (the ESP32's internal pulls live inside
   // QEMU and are otherwise invisible to the netlist).
   private pinPulls: Map<number, 0 | 1 | 2> = new Map();
+  // The direction the guest programmed per pad (1 output, 0 input), for the
+  // boards that report it. See setPinDirection.
+  private pinDirections: Map<number, 0 | 1> = new Map();
 
   // ── Pad drive state (the line contract, simulation/line) ─────────────────
   //
@@ -221,9 +224,53 @@ export class PinManager {
     if (newlyClassified) requestElectricalResolve();
   }
 
-  /** Pins the MCU has actively driven this session. */
+  /** Pins the MCU is driving: every pad it has written, plus every pad whose
+   *  direction it has declared an OUTPUT and not released. */
   getOutputPins(): ReadonlySet<number> {
     return this.outputPins;
+  }
+
+  /**
+   * Record the direction the guest programmed for a pad: 1 = output (the pad
+   * follows the MCU's latch), 0 = input (it follows whatever the circuit puts
+   * on it).
+   *
+   * Every ESP32-family bridge already reports this — the engines publish
+   * `onPinDir` and the QEMU worker sends `gpio_dir` — and until now the app
+   * dropped it, so a pad only counted as an output once the firmware TOGGLED
+   * it. Between `pinMode(pin, OUTPUT)` and the first edge, the pad was
+   * therefore treated as an input: the netlist gave it no V-source and
+   * connectDigitalInputsToMcu pushed the solved level INTO the guest. On an
+   * engine that models a host-held pad faithfully that is fatal — the host
+   * keeps the pad and the guest's writes never reach it again (the ESP32-P4's
+   * blink, where the LED stayed dark while the sketch printed LED ON).
+   *
+   * A board that never reports direction is unaffected: its pads are still
+   * classified by the edges they emit.
+   */
+  setPinDirection(pin: number, direction: 0 | 1): void {
+    const previous = this.pinDirections.get(pin);
+    if (previous === direction) return;
+    this.pinDirections.set(pin, direction);
+    if (direction === 1) {
+      this.outputPins.add(pin);
+      // The netlist has to grow a V-source for a pad that is now driven, and
+      // the input connector has to stop driving it. Both read the set above,
+      // and both only look again when a solve is asked for.
+      requestElectricalResolve();
+    } else if (this.outputPins.delete(pin)) {
+      // Released: the pad is an input again — its pull and the circuit decide
+      // it, not a V-source at whatever level the latch happened to hold. This
+      // is the one-wire shape (a DHT22's DATA line) as much as a sketch
+      // calling pinMode(INPUT) in the middle of a run.
+      requestElectricalResolve();
+    }
+  }
+
+  /** The direction the guest declared for a pad, or undefined when this board
+   *  never reports one. */
+  getPinDirection(pin: number): 0 | 1 | undefined {
+    return this.pinDirections.get(pin);
   }
 
   /**
@@ -261,6 +308,7 @@ export class PinManager {
    */
   resetPinStates(): void {
     this.outputPins.clear();
+    this.pinDirections.clear();
   }
 
   /**
@@ -291,6 +339,7 @@ export class PinManager {
     }
     this.pinStates.clear();
     this.outputPins.clear();
+    this.pinDirections.clear();
     this.pinPulls.clear();
     this.pwmValues.clear();
     this.pwmFreqs.clear();
@@ -403,5 +452,6 @@ export class PinManager {
     this.pwmListeners.clear();
     this.analogListeners.clear();
     this.outputPins.clear();
+    this.pinDirections.clear();
   }
 }

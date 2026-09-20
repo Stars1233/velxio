@@ -847,6 +847,23 @@ export class Esp32Bridge {
   }
 
   /**
+   * Stop driving a pin from the host: the pad goes back to whatever decides it
+   * on the guest's side — its own output latch while it drives, else the
+   * internal pull.
+   *
+   * The counterpart of `sendPinEvent`, and the seam an in-browser engine needs:
+   * those model a host-held pad the way silicon does, so a level injected here
+   * (the SPICE input connector pushes one into every wired input) keeps the pad
+   * until it is let go — and the guest's own writes never reach the wire again.
+   * The QEMU worker has no such ownership (a host injection just writes the
+   * GPIO_IN register, and the guest's GPIO_OUT is reported independently), so
+   * the default does nothing; an overlay bridge with an engine overrides it.
+   */
+  releasePinEvent(_gpioPin: number): void {
+    /* no host-held pad on the QEMU path — see the doc comment */
+  }
+
+  /**
    * Replay a chip-to-chip net level a chip on ANOTHER board drove, into this
    * board's worker. The worker never republishes what it receives here, so two
    * bridged workers cannot echo one edge back and forth.

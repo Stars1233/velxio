@@ -1758,6 +1758,21 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
     bridge.onGpioRouting = makeGpioRoutingHandler(id);
     bridge.onGpioRoutingClear = makeGpioRoutingClearHandler(id);
     bridge.onPinPull = makePinPullHandler(id);
+    // The direction the guest programmed for a pad — reported by every engine
+    // and by the QEMU worker, and until now read by nobody.
+    //
+    // Two things follow from a pad becoming an OUTPUT, and the app used to do
+    // neither until the firmware's FIRST EDGE: the netlist has to stamp its
+    // V-source (a pad with no source cannot light the LED wired to it), and
+    // the host has to stop driving it. The second one is what broke the P4's
+    // blink: connectDigitalInputsToMcu pushes the solved level into every
+    // wired pin it does not yet know as an output, the engine models a
+    // host-held pad faithfully, and so the pad stayed the host's for the rest
+    // of the run — the sketch printed LED ON while the LED sat dark.
+    bridge.onPinDir = (gpioPin, dir) => {
+      pinManagerMap.get(id)?.setPinDirection(gpioPin, dir);
+      if (dir === 1) bridge.releasePinEvent(gpioPin);
+    };
     bridge.onWs2812Update = makeWs2812Handler(id);
     bridge.onWifiStatus = (ws) => {
       set((s) => ({
