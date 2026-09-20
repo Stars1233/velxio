@@ -811,10 +811,17 @@ export class PiBridgeShim {
     if (bus === null || cs === null) return null;
     const op = parts[3];
     if (op === 'CONFIG') return null;
-    if (op !== 'X' && op !== 'XC') return null;
+    // W and WC are X and XC with no MISO buffer on the other side. A Linux
+    // guest writing a display frame passes rx == NULL to SPI_IOC_MESSAGE, and
+    // until this existed the daemon still waited for the bytes it was about to
+    // throw away: a full round trip to this tab per chunk, seconds per frame.
+    // Clocking the bytes out is identical; only the answer is dropped.
+    const writeOnly = op === 'W' || op === 'WC';
+    if (op !== 'X' && op !== 'XC' && !writeOnly) return null;
     const mosi = fromHex(parts[4]);
     if (mosi === null) return null;
-    const miso = this.spiTransfer(bus, cs, mosi, op === 'XC');
+    const miso = this.spiTransfer(bus, cs, mosi, op === 'XC' || op === 'WC');
+    if (writeOnly) return null;
     return `SPI_DATA ${bus} ${cs} ${toHex(miso)}`;
   }
 }
