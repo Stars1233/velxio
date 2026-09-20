@@ -1628,7 +1628,14 @@ export function appendHardwareSerial(boardId: string, chunk: string): void {
  * read at the NEXT Run; this is read while the blank panel is on screen.
  */
 export function appendSimulatorNote(boardId: string, text: string): void {
-  appendSerial(boardId, `\r\n[Velxio] ${text}\r\n`);
+  const line = `\r\n[Velxio] ${text}\r\n`;
+  // A Linux board's console is a terminal fed by the bridge's serial callback,
+  // not by the store: a note that only lands in serialOutput stays invisible
+  // there until the terminal is mounted again. Send it down the path the
+  // guest's own bytes take; that callback appends to the store as well.
+  const onSerial = bridgeMap.get(boardId)?.onSerialData;
+  if (onSerial) onSerial(line);
+  else appendSerial(boardId, line);
 }
 
 // ── Store ─────────────────────────────────────────────────────────────────
