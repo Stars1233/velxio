@@ -8,6 +8,7 @@ Run from the repo root:
     python -m pytest test/backend/unit/test_espidf_compiler.py -v
 """
 
+import re
 import sys
 import tempfile
 import shutil
@@ -16,7 +17,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / 'backend'))
 
-from app.services.espidf_compiler import ESPIDFCompiler
+from app.services.espidf_compiler import ESPIDFCompiler, main_cmake_with_user_libs
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -356,74 +357,62 @@ class TestResolveLibraryComponents(unittest.TestCase):
 # ── Test: main CMakeLists.txt patching ───────────────────────────────────────
 
 class TestMainCMakePatching(unittest.TestCase):
-    """Verify that component_names are injected into main/CMakeLists.txt correctly."""
+    """main/CMakeLists.txt: what the template must never say, and the one thing
+    the compiler adds to it when a sketch uses external libraries."""
 
     TEMPLATE_MAIN_CMAKE = (
         Path(__file__).parent.parent.parent.parent / 'backend'
         / 'app' / 'services' / 'esp-idf-template' / 'main' / 'CMakeLists.txt'
     )
 
-    def setUp(self):
-        self.tmp = tempfile.mkdtemp()
+    def _template(self) -> str:
+        return self.TEMPLATE_MAIN_CMAKE.read_text(encoding='utf-8')
 
-    def tearDown(self):
-        shutil.rmtree(self.tmp)
+    @staticmethod
+    def _main_registrations(cmake_text: str) -> list[str]:
+        """The argument list of every idf_component_register() call, comments
+        out of the way. add_prebuilt_library() has a REQUIRES of its own and is
+        deliberately not matched: that one belongs to the camera .a, not main."""
+        code = re.sub(r'#.*', '', cmake_text)
+        return re.findall(r'idf_component_register\s*\((.*?)\)', code, flags=re.S)
 
-    def _make_main_cmake(self) -> Path:
-        p = Path(self.tmp) / 'CMakeLists.txt'
-        shutil.copy(self.TEMPLATE_MAIN_CMAKE, p)
-        return p
+    def test_template_main_names_no_requires(self):
+        """Issue #342. ESP-IDF makes main depend on every component in the build
+        only while main names no REQUIRES/PRIV_REQUIRES of its own; one named
+        requirement and a sketch can no longer reach esp_core_dump.h, or any
+        other component outside that closure."""
+        registrations = self._main_registrations(self._template())
+        self.assertEqual(len(registrations), 3, 'pure-sketch, Arduino and fallback branches')
+        for args in registrations:
+            self.assertNotIn('REQUIRES', args,
+                             'main names a requirement: the sketch loses the rest of the IDF')
 
-    def test_template_cmake_has_expected_requires_token(self):
-        cmake_text = self.TEMPLATE_MAIN_CMAKE.read_text(encoding='utf-8')
-        self.assertIn('REQUIRES ${_arduino_comp_name}', cmake_text,
-                      'Template REQUIRES token not found — patching will silently do nothing')
-
-    def test_patch_appends_component_names_to_requires(self):
-        cmake_path = self._make_main_cmake()
-        cmake_text = cmake_path.read_text(encoding='utf-8')
-        old_req = r'REQUIRES ${_arduino_comp_name}'
-        component_names = ['Adafruit_GFX_Library', 'Adafruit_SSD1306']
-        main_reqs = ' '.join(component_names)
-        self.assertIn(old_req, cmake_text, 'Token not found — test setup error')
-
-        cmake_text = cmake_text.replace(old_req, f'{old_req} {main_reqs}')
-        cmake_path.write_text(cmake_text, encoding='utf-8')
-
-        result = cmake_path.read_text(encoding='utf-8')
-        self.assertIn('Adafruit_GFX_Library', result)
-        self.assertIn('Adafruit_SSD1306', result)
-        self.assertIn('${_arduino_comp_name}', result,
-                      'Original arduino_comp_name was removed — it must be preserved')
+    def test_template_cmake_has_expected_include_dirs_token(self):
+        self.assertIn('INCLUDE_DIRS "."', self._template(),
+                      'Template INCLUDE_DIRS token not found — patching will silently do nothing')
 
     def test_patch_adds_user_libs_all_include_dir(self):
         """user_libs_all dir must be added to INCLUDE_DIRS so sketch.ino.cpp
         can find all library headers directly."""
-        cmake_path = self._make_main_cmake()
-        cmake_text = cmake_path.read_text(encoding='utf-8')
-        self.assertIn('INCLUDE_DIRS "."', cmake_text, 'Template INCLUDE_DIRS token missing')
+        result = main_cmake_with_user_libs(self._template())
+        for args in self._main_registrations(result):
+            self.assertIn('"../user_libs/user_libs_all"', args,
+                          'user_libs_all INCLUDE_DIR not added — library headers invisible to sketch')
+            self.assertIn('"."', args, 'Original "." INCLUDE_DIR must be preserved')
 
-        cmake_text = cmake_text.replace(
-            'INCLUDE_DIRS "."',
-            'INCLUDE_DIRS "." "../user_libs/user_libs_all"',
-        )
-        cmake_path.write_text(cmake_text, encoding='utf-8')
-
-        result = cmake_path.read_text(encoding='utf-8')
-        self.assertIn('../user_libs/user_libs_all', result,
-                      'user_libs_all INCLUDE_DIR not added — library headers invisible to sketch')
-        self.assertIn('"."', result, 'Original "." INCLUDE_DIR must be preserved')
+    def test_patch_never_gives_main_a_requires(self):
+        """The patch used to append user_libs_all to main's REQUIRES. With no
+        REQUIRES, main already links every build component, user_libs_all too;
+        writing one back is the #342 regression from the compiler's side."""
+        result = main_cmake_with_user_libs(self._template())
+        for args in self._main_registrations(result):
+            self.assertNotIn('REQUIRES', args)
 
     def test_patch_is_idempotent(self):
         """Applying the patch twice must not duplicate entries."""
-        cmake_path = self._make_main_cmake()
-        cmake_text = cmake_path.read_text(encoding='utf-8')
-        old_req = r'REQUIRES ${_arduino_comp_name}'
-        component_names = ['Adafruit_GFX_Library']
-
-        cmake_text = cmake_text.replace(old_req, f'{old_req} {" ".join(component_names)}')
-        count = cmake_text.count('Adafruit_GFX_Library')
-        self.assertEqual(count, 1)
+        once = main_cmake_with_user_libs(self._template())
+        self.assertEqual(main_cmake_with_user_libs(once), once)
+        self.assertEqual(once.count('user_libs_all'), 3)
 
 
 # ── Test: template CMakeLists.txt structure ──────────────────────────────────
