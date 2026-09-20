@@ -11,7 +11,7 @@
  *  - Click Clear to wipe all captured samples.
  */
 
-import React, { useRef, useEffect, useState, useCallback, useLayoutEffect } from 'react';
+import React, { useRef, useEffect, useState, useCallback, useLayoutEffect, useMemo } from 'react';
 import { cssVar } from '../../lib/theme';
 import { useResolvedTheme } from '../../hooks/useTheme';
 import ReactDOM from 'react-dom';
@@ -26,6 +26,8 @@ import {
 import { useSimulatorStore } from '../../store/useSimulatorStore';
 import { boardDisplayName } from '../../types/board';
 import type { BoardKind } from '../../types/board';
+import { boardPads } from '../../simulation/boardPads';
+import { boardPinGroupFor } from '../../simulation/spice/boardPinGroups';
 import './Oscilloscope.css';
 
 // Horizontal divisions shown at once
@@ -45,8 +47,13 @@ const TIME_DIV_OPTIONS: { label: string; ms: number }[] = [
   { label: '500 ms', ms: 500 },
 ];
 
-/** Return the list of monitorable pins for a given board kind */
-function getPinsForBoardKind(boardKind: BoardKind): { pin: number; label: string }[] {
+/**
+ * Pins to offer for a board whose element is not mounted, so the picker still
+ * has something to show. The mounted board answers for itself — see
+ * simulation/boardPads, which is what every family here and every family this
+ * list never heard of goes through.
+ */
+function fallbackPinsForBoardKind(boardKind: BoardKind): { pin: number; label: string }[] {
   switch (boardKind) {
     case 'arduino-mega':
       return [
@@ -463,7 +470,14 @@ const ChannelPicker: React.FC<ChannelPickerProps> = ({
   );
 
   const selectedBoard = boards.find((b) => b.id === selectedBoardId) ?? boards[0];
-  const pins = selectedBoard ? getPinsForBoardKind(selectedBoard.boardKind) : [];
+  // Ask the board on the canvas what pads it has; the static list is only for
+  // a board that is not rendered (it knows a handful of families and answers
+  // the Uno's pins for the rest).
+  const pins = useMemo(() => {
+    if (!selectedBoard) return [];
+    const pads = boardPads(selectedBoard.id, selectedBoard.boardKind);
+    return pads.length > 0 ? pads : fallbackPinsForBoardKind(selectedBoard.boardKind);
+  }, [selectedBoard]);
 
   const activePinsForBoard = new Set(
     activeChannels
@@ -638,7 +652,13 @@ export const Oscilloscope: React.FC = () => {
 
   const handleAddChannel = useCallback(
     (boardId: string, pin: number, pinLabel: string) => {
-      addChannel(boardId, pin, pinLabel);
+      // The square wave has to sit at the board's own logic level: the default
+      // is 5 V, which drew every 3.3 V board's trace at the wrong height on a
+      // volts axis it may be sharing with an analog probe. Same source the wire
+      // probe uses (probeResolve's vccOf).
+      const board = useSimulatorStore.getState().boards.find((b) => b.id === boardId);
+      const amplitudeV = board ? boardPinGroupFor(board.boardKind).vcc : undefined;
+      addChannel(boardId, pin, pinLabel, amplitudeV);
     },
     [addChannel],
   );
