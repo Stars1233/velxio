@@ -1775,6 +1775,38 @@ class ESPIDFCompiler:
                 deps[name] = version
         return deps
 
+    @staticmethod
+    def _without_merged_duplicates(deps: dict, merged_libs: dict | None) -> dict:
+        """One library, one copy.
+
+        A registry component and an Arduino library can be the same project:
+        `lvgl/lvgl` and the LVGL a user installs from the Library Manager are.
+        Declaring both puts two copies of it in the build, each with its own
+        include root, and then `#include <lvgl.h>` in the sketch resolves to
+        whichever path comes first while the project's `lv_conf.h` configures
+        the other one — the sketch and the library compiled against different
+        configurations, which is exactly as broken as it sounds (issue #352).
+
+        The installed Arduino library wins. It is the one the user chose, the
+        one their config header is written for, and the one arduino-cli would
+        have used. The registry copy is only there to cover headers nobody
+        installed.
+        """
+        if not deps or not merged_libs:
+            return deps
+        norm = lambda n: n.lower().replace('-', '_').replace(' ', '_')
+        have = {norm(name) for name in merged_libs.values()}
+        kept: dict = {}
+        for dep, version in deps.items():
+            if norm(dep.split('/')[-1]) in have:
+                logger.info(
+                    '[espidf] %s is installed as an Arduino library — not also '
+                    'fetching the registry component', dep
+                )
+                continue
+            kept[dep] = version
+        return kept
+
     # IDF components that ship INSIDE the IDF tree (not the registry) and are
     # NOT on an Arduino sketch's include path by default. arduino-esp32 3.x
     # keeps most of its requires PRIVATE, so a sketch that includes one of
@@ -2228,6 +2260,22 @@ class ESPIDFCompiler:
         'lv_conf.h', 'lv_drv_conf.h', 'user_config.h', 'user_setup.h',
         'sdkconfig.h', 'zconf.h',
     })
+
+    # A library that finds an ESP-IDF Kconfig prefers it over the header the
+    # project supplied — on a real IDF project that IS the right answer. Here
+    # it is not: a library the user installed from the Arduino index is
+    # configured the Arduino way, by a header next to the sketch, and it only
+    # sees a Kconfig at all because we compile it inside an IDF component. So
+    # when the project ships the header, the library is told to leave the
+    # Kconfig alone. Each entry is the library's own documented escape hatch,
+    # not a patch to its sources.
+    _ARDUINO_CONFIG_WINS: dict[str, tuple[str, ...]] = {
+        # LVGL includes lv_conf_kconfig.h unconditionally unless this is set,
+        # and our sdkconfig carries its symbols half-filled: the build dies on
+        # "LV_MEM_SIZE >= 2kB is required" with the user's lv_conf.h sitting
+        # right there, unread (issue #352).
+        'lv_conf.h': ('LV_KCONFIG_IGNORE',),
+    }
 
     # ...and the general shape of one. Config headers are named by convention
     # across the whole Arduino ecosystem, and one live build showed SIX of
@@ -3077,6 +3125,27 @@ class ESPIDFCompiler:
                 'target_compile_definitions(${COMPONENT_LIB} PRIVATE'
                 ' alloca=__builtin_alloca memcpy_P=memcpy memcmp_P=memcmp)\n'
             )
+            # ...and the "this project configures you the Arduino way" switches,
+            # one per config header the sketch actually ships.
+            _main_dir = Path(user_libs_dir).parent / 'main'
+            _cfg_defs = [
+                macro
+                for header, macros in self._ARDUINO_CONFIG_WINS.items()
+                for macro in macros
+                if (_main_dir / header).is_file()
+            ]
+            if _cfg_defs:
+                logger.info(
+                    f'[espidf] project config headers present -> {_cfg_defs}'
+                )
+                defs_block += (
+                    '# The project ships the library\'s own config header, so the\n'
+                    '# library must read THAT and not the IDF Kconfig it can see\n'
+                    '# from inside this component.\n'
+                    'target_compile_definitions(${COMPONENT_LIB} PRIVATE '
+                    + ' '.join(_cfg_defs)
+                    + ')\n'
+                )
 
         # The -Werror relaxations the main component gets, for the same reason
         # but stronger: these are LIBRARY sources the user cannot even edit.
@@ -3100,6 +3169,31 @@ class ESPIDFCompiler:
                 '    -Wno-error=uninitialized)\n'
             )
 
+        # The sketch's own folder, PRIVATE to these sources.
+        #
+        # This is the rule that makes a user-configurable library work at all.
+        # arduino-cli puts the sketch directory on the include path of every
+        # translation unit it compiles, libraries included, and a whole class
+        # of libraries is built on that: LVGL looks for the project's
+        # `lv_conf.h`, TFT_eSPI for `User_Setup.h`, NimBLE for `nimconfig.h`.
+        # The header lives next to the .ino and the LIBRARY includes it — and
+        # the library's sources compile in HERE, not in main, so exporting only
+        # each library's own root left them with no way to find it. LVGL then
+        # fell down its fallback chain to the Kconfig defaults and died on
+        # "LV_MEM_SIZE >= 2kB is required" (issue #352).
+        #
+        # Private, so the sketch folder reaches the library sources that ask
+        # for it without entering the include path of the core or of anything
+        # that merely depends on this component. Only when there is something
+        # to compile: with no SRCS this registers an INTERFACE library, where
+        # a PRIVATE include is a CMake error.
+        if cpp_files:
+            _sketch_dir = '"../../main"'
+            priv_include_dirs_line = (
+                f'{priv_include_dirs_line} {_sketch_dir}'
+                if priv_include_dirs_line
+                else f'PRIV_INCLUDE_DIRS {_sketch_dir}'
+            )
         _priv_cmake_line = (
             f'    {priv_include_dirs_line}\n' if priv_include_dirs_line else ''
         )
@@ -5627,7 +5721,10 @@ class ESPIDFCompiler:
                 )
             )
             manifest_changed = self._sync_managed_components(
-                project_dir, self._detect_managed_components(sketch_src),
+                project_dir,
+                self._without_merged_duplicates(
+                    self._detect_managed_components(sketch_src), merged_libs_report
+                ),
             )
 
             # Components that live in the IDF tree (esp_lcd, esp_mm...) need no

@@ -250,3 +250,66 @@ def test_flat_layout_resolves_through_utility(c: ESPIDFCompiler, tmp_path: Path)
         "utility/helper.h": "// the other root a flat library gets\n",
     })
     assert c._walk_library_includes(lib, False, _accept_all) == []
+
+
+# ── A library the user configures ────────────────────────────────────────
+# LVGL wants an lv_conf.h, TFT_eSPI a User_Setup.h, NimBLE a nimconfig.h: the
+# user writes the header, the LIBRARY includes it, and arduino-cli makes that
+# work by putting the sketch folder on the include path of every translation
+# unit. A project with its own lv_conf.h died on "LV_MEM_SIZE >= 2kB is
+# required" with the file sitting right there, unread (issue #352). Three
+# things were wrong, and all three are this shape rather than LVGL's.
+
+def test_an_installed_library_is_not_fetched_from_the_registry_as_well(
+    c: ESPIDFCompiler,
+) -> None:
+    """One library, one copy.
+
+    `lvgl/lvgl` in the registry and the LVGL the user installed from the
+    Library Manager are the same project. With both in the build the sketch's
+    `#include <lvgl.h>` resolves to whichever include root comes first while
+    the project's lv_conf.h configures the other one.
+    """
+    deps = {'lvgl/lvgl': '*', 'espressif/esp32-camera': '*'}
+    merged = {'lvgl.h': 'lvgl'}  # header -> library folder, as the resolver reports
+    kept = c._without_merged_duplicates(deps, merged)
+    assert 'lvgl/lvgl' not in kept, 'the installed library wins'
+    assert kept['espressif/esp32-camera'] == '*', 'nobody installed that one'
+
+
+def test_a_registry_component_survives_when_no_library_provides_it(
+    c: ESPIDFCompiler,
+) -> None:
+    deps = {'lvgl/lvgl': '*'}
+    assert c._without_merged_duplicates(deps, {}) == deps
+    assert c._without_merged_duplicates(deps, None) == deps
+    assert c._without_merged_duplicates(deps, {'Wire.h': 'Wire'}) == deps
+
+
+@pytest.mark.parametrize(
+    "dep, reported",
+    [
+        ('lvgl/lvgl', 'LVGL'),          # registry lowercase, properties uppercase
+        ('someone/my-lib', 'My Lib'),   # dashes in one, spaces in the other
+        ('someone/my_lib', 'my-lib'),
+    ],
+)
+def test_library_name_matching_survives_spelling(
+    c: ESPIDFCompiler, dep: str, reported: str
+) -> None:
+    """Registry names, folder names and library.properties names disagree
+    about case, dashes and spaces; the same project is still one copy."""
+    assert c._without_merged_duplicates({dep: '*'}, {'x.h': reported}) == {}
+
+
+def test_the_project_config_header_beats_the_idf_kconfig(c: ESPIDFCompiler) -> None:
+    """A library that finds a Kconfig prefers it — right on a real IDF
+    project, wrong for an Arduino library the user configured by hand. The
+    escape hatch is the library's own, and it is spent only when the project
+    actually ships the header."""
+    assert 'lv_conf.h' in c._ARDUINO_CONFIG_WINS
+    assert c._ARDUINO_CONFIG_WINS['lv_conf.h'] == ('LV_KCONFIG_IGNORE',)
+    # Every switch names a macro the library documents, never a source patch.
+    for header, macros in c._ARDUINO_CONFIG_WINS.items():
+        assert header.endswith('.h')
+        assert macros and all(m.isidentifier() for m in macros)
