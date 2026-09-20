@@ -56,6 +56,30 @@ export function spiChainUnder(
   return { next: head };
 }
 
+/**
+ * Take `handler` out of the channel, wherever it sits.
+ *
+ * A part that is unmounted while another listener sits on top of it cannot
+ * simply hand the channel back — it does not hold it. Left in place it would
+ * keep answering the bus from a torn-down state: a card whose store has been
+ * cleared, still selected because its CS subscription is gone, reading every
+ * block back as zeros with no card on the canvas to explain it.
+ */
+export function spiChainDetach(
+  spi: { onByte: SpiByteHandler | null },
+  handler: SpiByteHandler,
+): void {
+  const under = (h: Chained | null): Chained | null => (h?.[LINK]?.next ?? null) as Chained | null;
+  let head = (spi.onByte ?? null) as Chained | null;
+  while (head === handler) head = under(head);
+  spi.onByte = head;
+  for (let node = head; node && node[LINK]; node = node[LINK].next as Chained | null) {
+    let nxt = node[LINK].next as Chained | null;
+    while (nxt === handler) nxt = under(nxt);
+    node[LINK].next = nxt;
+  }
+}
+
 /** Tag `handler` as owned by `owner`, forwarding through `link`. */
 export function spiChainTag(
   handler: SpiByteHandler,

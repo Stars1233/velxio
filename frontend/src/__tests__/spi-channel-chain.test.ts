@@ -8,7 +8,12 @@
  * a byte is its own.
  */
 import { describe, it, expect } from 'vitest';
-import { spiChainTag, spiChainUnder, type SpiByteHandler } from '../simulation/parts/spiChannel';
+import {
+  spiChainDetach,
+  spiChainTag,
+  spiChainUnder,
+  type SpiByteHandler,
+} from '../simulation/parts/spiChannel';
 
 /** A listener that records what it is given and passes it on. */
 function listener(owner: string, seen: number[], current: SpiByteHandler | null) {
@@ -66,6 +71,22 @@ describe('the SPI byte channel', () => {
     expect(second).toEqual([0x55]);
     expect(card, 'the card is not ours to remove').toEqual([0x55]);
     expect(first, 'the buried instance is gone').toEqual([]);
+  });
+
+  it('lets a listener leave from the middle when it is unmounted', () => {
+    // A card deleted from the canvas while a panel sits on top of it cannot
+    // hand the channel back — it does not hold it. Left in the chain it would
+    // answer from a store that has already been cleared.
+    const panel: number[] = [];
+    const card: number[] = [];
+    const spi: { onByte: SpiByteHandler | null } = { onByte: null };
+    const cardFn = listener('sd:card', card, spi.onByte);
+    spi.onByte = cardFn;
+    spi.onByte = listener('tft:panel', panel, spi.onByte);
+    spiChainDetach(spi, cardFn);
+    spi.onByte!(0x99);
+    expect(panel).toEqual([0x99]);
+    expect(card, 'the unmounted card hears nothing').toEqual([]);
   });
 
   it('keeps ordinary chains untouched when nothing shares an owner', () => {

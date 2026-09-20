@@ -21,7 +21,7 @@
  */
 
 import { PartSimulationRegistry } from './PartSimulationRegistry';
-import { spiChainTag, spiChainUnder } from './spiChannel';
+import { spiChainDetach, spiChainTag, spiChainUnder } from './spiChannel';
 import { requestLine, releaseLineGap } from '../line/requestLine';
 import { VirtualDS1307, VirtualBMP280, VirtualDS3231, VirtualPCF8574 } from '../I2CBusManager';
 import type { I2CDevice } from '../I2CBusManager';
@@ -1237,9 +1237,10 @@ PartSimulationRegistry.register('microsd-card', {
 
     return () => {
       csCleanup?.();
-      // Only give the channel back if it is still ours — a part that attached
-      // after us owns it now, and clobbering that would mute IT instead.
-      if (spi.onByte === onByte) spi.onByte = chain.next ?? null;
+      // Out of the chain wherever we sit. Restoring the channel outright
+      // would mute a part that attached after us, and staying in it would
+      // leave a torn-down card answering from an emptied store.
+      spiChainDetach(spi, onByte);
       respQueue.length = 0;
       cmdBuf = [];
       store.clear();

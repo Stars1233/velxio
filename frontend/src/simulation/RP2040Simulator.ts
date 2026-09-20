@@ -303,16 +303,50 @@ export class RP2040Simulator implements LineCapable {
    */
   private _spiAdapter: {
     onByte: ((mosi: number) => void) | null;
+    answered: boolean;
     completeTransfer: (miso: number) => void;
   } | null = null;
+  /** Clock one byte out of SPI0 and take exactly one answer back.
+   *
+   *  Whoever is listening may drive MISO by calling `completeTransfer`; the
+   *  first to do so has the bus. If nobody does — every device on it
+   *  deselected, which is the normal state while a card's CS is high — the
+   *  line idles at 0xFF through its pull-up, and saying so is what keeps the
+   *  peripheral from waiting for a byte that is never coming: rp2040js leaves
+   *  `busy` set until completeTransmit runs, so silence here hangs the sketch
+   *  on its very first transfer. With no listener at all the old loopback
+   *  stands, which is what a bare SPI.transfer() with nothing on the canvas
+   *  expects. */
+  private clockSpiByte(v: number): void {
+    const adapter = this._spiAdapter;
+    if (!adapter || !adapter.onByte) {
+      this.rp2040?.spi[0].completeTransmit(v);
+      return;
+    }
+    adapter.answered = false;
+    adapter.onByte(v);
+    if (!adapter.answered) adapter.completeTransfer(0xff);
+  }
+
   public get spi(): {
     onByte: ((mosi: number) => void) | null;
     completeTransfer: (miso: number) => void;
   } {
     if (!this._spiAdapter) {
+      // One clocked byte, one answer. On this SoC completeTransmit PUSHES a
+      // byte into the RX FIFO and re-enters the transmit path, so it is not a
+      // register a second writer can overwrite the way the AVR's SPDR is: a
+      // second answer would shift the whole received stream by one and
+      // eventually overrun the FIFO. Devices share a bus now — a display and
+      // an SD card on the same SCK/MOSI — so more than one listener sees each
+      // byte, and the first one that actually drives MISO has it. The rest
+      // are in high-Z, which is what the flag models.
       const adapter = {
         onByte: null as ((mosi: number) => void) | null,
+        answered: false,
         completeTransfer: (miso: number) => {
+          if (adapter.answered) return;
+          adapter.answered = true;
           this.rp2040?.spi[0].completeTransmit(miso & 0xff);
         },
       };
@@ -321,7 +355,7 @@ export class RP2040Simulator implements LineCapable {
       // setter just stages the handler — we wire it in start().
       this._spiAdapter = adapter;
       if (this.rp2040) {
-        this.rp2040.spi[0].onTransmit = (v: number) => adapter.onByte?.(v);
+        this.rp2040.spi[0].onTransmit = (v: number) => this.clockSpiByte(v);
       }
     }
     return this._spiAdapter;
@@ -452,13 +486,7 @@ export class RP2040Simulator implements LineCapable {
     // if a SPI part later accesses simulator.spi. The adapter routes
     // onTransmit into adapter.onByte and uses completeTransmit to drive
     // MISO when the part calls completeTransfer.
-    this.rp2040.spi[0].onTransmit = (v: number) => {
-      if (this._spiAdapter && this._spiAdapter.onByte) {
-        this._spiAdapter.onByte(v);
-      } else {
-        this.rp2040!.spi[0].completeTransmit(v);
-      }
-    };
+    this.rp2040.spi[0].onTransmit = (v: number) => this.clockSpiByte(v);
     this.rp2040.spi[1].onTransmit = (v: number) => {
       this.rp2040!.spi[1].completeTransmit(v);
     };
@@ -829,13 +857,7 @@ export class RP2040Simulator implements LineCapable {
     // canvas stays black (real regression — Pico Doom shipped with this
     // bug for months because the same wiring in initMicroPython was
     // adapter-aware but this Arduino path wasn't).
-    this.rp2040.spi[0].onTransmit = (v: number) => {
-      if (this._spiAdapter && this._spiAdapter.onByte) {
-        this._spiAdapter.onByte(v);
-      } else {
-        this.rp2040!.spi[0].completeTransmit(v);
-      }
-    };
+    this.rp2040.spi[0].onTransmit = (v: number) => this.clockSpiByte(v);
     this.rp2040.spi[1].onTransmit = (value: number) => {
       this.rp2040!.spi[1].completeTransmit(value); // loopback
     };

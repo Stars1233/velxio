@@ -80,10 +80,12 @@ export function connectChipInputsToSolve(): () => void {
         let next: boolean;
         if (v >= V_HIGH) next = true;
         else if (v <= V_LOW) next = false;
-        else if (prev !== undefined) next = prev; // inside the band — hold
-        // Nothing to hold and nothing the band decides: say nothing rather
-        // than invent a falling edge the circuit never asked for.
-        else continue;
+        // Inside the band: hold. The MCU path also declines to invent a level
+        // when there is no history, but a custom chip's pins are not the same
+        // case — nothing reported a problem with the old default here, and a
+        // chip that expects its inputs to start low at power-on would notice
+        // the difference. The proven defect is the non-finite one above.
+        else next = prev ?? false;
         if (prev === next) continue;
         lastState.set(synth, next);
         pinManager.triggerPinChange(synth, next);

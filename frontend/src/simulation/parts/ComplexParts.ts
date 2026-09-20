@@ -1,5 +1,5 @@
 import { PartSimulationRegistry } from './PartSimulationRegistry';
-import { spiChainTag, spiChainUnder } from './spiChannel';
+import { spiChainDetach, spiChainTag, spiChainUnder } from './spiChannel';
 import type { AnySimulator } from './PartSimulationRegistry';
 import { RP2040Simulator } from '../RP2040Simulator';
 import { getADC, setAdcVoltage, emitPropertyChange } from './partUtils';
@@ -1259,9 +1259,9 @@ const ili9341Simulation = {
 
     // ── Cleanup ───────────────────────────────────────────────────────
     return () => {
-      // Only hand the channel back if it is still ours: a part that attached
-      // after us owns it now, and restoring over it would mute IT instead.
-      if (spi.onByte === onByte) spi.onByte = chain.next ?? null;
+      // Out of the chain wherever we sit: restoring the channel outright
+      // would mute a part that attached after us.
+      spiChainDetach(spi, onByte);
       if (idleTimerId !== null) clearTimeout(idleTimerId);
       el.removeEventListener('canvas-ready', onCanvasReady);
       unsubscribers.forEach((u) => u());

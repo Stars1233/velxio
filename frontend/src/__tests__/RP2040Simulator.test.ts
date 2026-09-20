@@ -485,6 +485,47 @@ describe('RP2040Simulator — SPI', () => {
     expect(handler).toHaveBeenCalledWith(0x00);
   });
 
+  // A display and an SD card share SCK/MOSI on every TFT+SD project, so more
+  // than one listener sees each byte now. On this SoC completeTransmit PUSHES
+  // into the RX FIFO — it is not a register a second writer overwrites — so
+  // the bus has to settle on exactly one answer per clocked byte.
+  it('takes the first answer for a clocked byte and ignores a second', () => {
+    const mcu = sim.getMCU()!;
+    const pushed: number[] = [];
+    mcu.spi[0].completeTransmit = (v: number) => pushed.push(v);
+    const spi = sim.spi;
+    spi.onByte = () => {
+      spi.completeTransfer(0x5a); // the selected device answers
+      spi.completeTransfer(0xff); // a second listener idles on top of it
+    };
+    mcu.spi[0].onTransmit(0xaa);
+    expect(pushed, 'one clocked byte, one byte back').toEqual([0x5a]);
+  });
+
+  it('idles the line high when no listener drives MISO', () => {
+    // Every device deselected — the normal state while a card's CS is high.
+    // rp2040js keeps `busy` set until completeTransmit runs, so saying
+    // nothing here would hang the sketch on its first transfer.
+    const mcu = sim.getMCU()!;
+    const pushed: number[] = [];
+    mcu.spi[0].completeTransmit = (v: number) => pushed.push(v);
+    const spi = sim.spi;
+    spi.onByte = () => {
+      /* not mine: high-Z */
+    };
+    mcu.spi[0].onTransmit(0xaa);
+    expect(pushed, 'the pull-up answers').toEqual([0xff]);
+  });
+
+  it('keeps the bare loopback when nothing is listening at all', () => {
+    const mcu = sim.getMCU()!;
+    const pushed: number[] = [];
+    mcu.spi[0].completeTransmit = (v: number) => pushed.push(v);
+    sim.spi.onByte = null;
+    mcu.spi[0].onTransmit(0x42);
+    expect(pushed).toEqual([0x42]);
+  });
+
   it('setSPIHandler() does nothing when rp2040 is null', () => {
     const freshSim = new RP2040Simulator(pm);
     // No loadBinary
