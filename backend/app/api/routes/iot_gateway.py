@@ -147,6 +147,100 @@ _HEAD_RE = re.compile(rb'<head[^>]*>', re.IGNORECASE)
 _HTML_RE = re.compile(rb'<html[^>]*>', re.IGNORECASE)
 
 
+# ── Saying "there is no server here" so the user can read it ────────────────
+# Two things ate every word of the old answer.
+#
+# The status: a proxy with nothing to proxy to is a textbook 502, and that is
+# what this route returned. But velxio.dev is behind Cloudflare, and Cloudflare
+# replaces an origin 502 (and 504) with its own branded interstitial — "Bad
+# gateway / Error code 502 / velxio.dev Host Error". The careful explanation
+# below never left the building. Reported by a user running the 100-days
+# "Smart Indoor Security System": a MicroPython sketch that joins WiFi and
+# POSTs to a cloud API, starting no server at all, so the WiFi badge's gateway
+# link was always going to land here. So these answers carry a 4xx, which
+# every CDN passes through untouched; the machine-readable `error` key keeps
+# the distinction a 502 used to carry.
+#
+# The body: the frontend opens the gateway with window.open(_blank), so a JSON
+# body dumps as raw text in a fresh tab. Same content negotiation the plan gate
+# above already does — HTML to a browser navigation, JSON to fetch/XHR.
+_ERROR_PAGE_CSS = (
+    'body{background:#1e1e1e;color:#ddd;font-family:-apple-system,'
+    'BlinkMacSystemFont,sans-serif;display:flex;min-height:100vh;margin:0;'
+    'align-items:center;justify-content:center;text-align:center}'
+    '.box{max-width:520px;padding:32px}h1{font-size:20px;color:#fff}'
+    'p{color:#aaa;line-height:1.6;font-size:14px}'
+    'code{background:#2a2a2a;color:#ddd;padding:2px 6px;border-radius:4px}'
+)
+
+
+def _gateway_error(
+    request: Request,
+    *,
+    error: str,
+    title: str,
+    html_body: str,
+    message: str,
+    status_code: int,
+) -> Response:
+    """The one shape every dead end of this proxy answers with."""
+    if 'text/html' in (request.headers.get('accept') or ''):
+        return Response(
+            content=(
+                '<!doctype html><html><head><meta charset="utf-8">'
+                f'<title>Velxio — {title}</title>'
+                '<meta name="viewport" content="width=device-width, initial-scale=1">'
+                f'<style>{_ERROR_PAGE_CSS}</style></head><body><div class="box">'
+                f'<h1>{title}</h1>{html_body}'
+                '</div></body></html>'
+            ),
+            status_code=status_code,
+            media_type='text/html',
+        )
+    return Response(
+        content=json.dumps({'error': error, 'message': message}),
+        status_code=status_code,
+        media_type='application/json',
+    )
+
+
+_NO_SERVER_MESSAGE = (
+    'The board is on the network, but nothing answered on port 80. The IoT '
+    'gateway forwards HTTP to a web server your sketch starts — a sketch that '
+    'only reads sensors, prints to the serial monitor or POSTs to a cloud API '
+    'has no page to show. Start a server (WebServer on Arduino, socket / '
+    'microdot on MicroPython) and listen on port 80.'
+)
+
+_NO_SERVER_HTML = (
+    '<p>The board is on the network, but nothing answered on port 80.</p>'
+    '<p>This gateway forwards HTTP to a <b>web server your sketch starts</b>. '
+    'A sketch that only reads sensors, prints to the serial monitor or POSTs '
+    'to a cloud API has no page to serve — there is nothing broken here, and '
+    'the simulation keeps running.</p>'
+    '<p>To get a page: listen on port 80 (<code>WebServer</code> on Arduino, '
+    '<code>socket</code> or microdot on MicroPython), then open this link '
+    'again once the sketch prints that the server started.</p>'
+)
+
+
+def no_server_response(request: Request) -> Response:
+    """The board is reachable, but nothing is listening on port 80.
+
+    Exported because the overlay resolver for browser-side lwIP boards (Pico W
+    and the esp32*js engines) reaches the same dead end and must not answer it
+    with a 502 either.
+    """
+    return _gateway_error(
+        request,
+        error='no_server_on_board',
+        title='No web server on this board',
+        html_body=_NO_SERVER_HTML,
+        message=_NO_SERVER_MESSAGE,
+        status_code=404,
+    )
+
+
 def _gateway_prefix(request: Request, path: str) -> str:
     """The '/api/gateway/<client_id>/' this request came through, taken from
     the request itself so it carries the browser's own encoding of the id."""
@@ -262,21 +356,31 @@ async def gateway_proxy(client_id: str, path: str, request: Request) -> Response
     # the access point, so it never gets a DHCP lease, never reaches 'got_ip',
     # and never registers the bridge this proxy looks up — there is nothing to
     # reach and nothing the user did wrong. Name that case first.
-    return Response(
-        content=json.dumps({
-            'error': 'no_reachable_board',
-            'message': (
-                'Nothing is registered for this client, so there is no server '
-                'to reach. If your sketch calls WiFi.softAP(), that is why: '
-                'the simulator can reach a board that JOINED a network, not a '
-                'board that created one. Join a simulated network instead '
-                '(WiFi.begin("Velxio-GUEST") — open, no password) and start '
-                'your server on port 80. If the sketch does join a network, '
-                'wait for it to print its IP before opening the gateway.'
-            ),
-        }),
+    return _gateway_error(
+        request,
+        error='no_reachable_board',
+        title='No board to reach',
+        html_body=(
+            '<p>Nothing is registered for this simulation, so there is no '
+            'server to reach.</p>'
+            '<p>If your sketch calls <code>WiFi.softAP()</code>, that is why: '
+            'the simulator can reach a board that <b>joined</b> a network, not '
+            'one that created one. Join a simulated network instead — '
+            '<code>WiFi.begin("Velxio-GUEST")</code>, open, no password — and '
+            'start your server on port 80.</p>'
+            '<p>If the sketch does join a network, wait for it to print its IP '
+            'before opening the gateway.</p>'
+        ),
+        message=(
+            'Nothing is registered for this client, so there is no server '
+            'to reach. If your sketch calls WiFi.softAP(), that is why: '
+            'the simulator can reach a board that JOINED a network, not a '
+            'board that created one. Join a simulated network instead '
+            '(WiFi.begin("Velxio-GUEST") — open, no password) and start '
+            'your server on port 80. If the sketch does join a network, '
+            'wait for it to print its IP before opening the gateway.'
+        ),
         status_code=404,
-        media_type='application/json',
     )
 
 
@@ -301,16 +405,26 @@ async def _proxy_esp32(inst, path: str, request: Request) -> Response:
                 headers=headers,
             )
     except httpx.ConnectError:
-        return Response(
-            content='{"error":"ESP32 HTTP server is not responding. Make sure your sketch starts a WebServer on port 80."}',
-            status_code=502,
-            media_type='application/json',
-        )
+        return no_server_response(request)
     except httpx.TimeoutException:
-        return Response(
-            content='{"error":"ESP32 HTTP server timed out"}',
-            status_code=504,
-            media_type='application/json',
+        return _gateway_error(
+            request,
+            error='board_server_timeout',
+            title='The board did not answer in time',
+            html_body=(
+                '<p>A web server is listening on this board, but it did not '
+                'finish the reply within 10 seconds.</p>'
+                '<p>The emulated CPU runs slower than real silicon, so a '
+                'handler that blocks — a long <code>delay()</code>, a sensor '
+                'read in the request path — can overrun. Keep the simulation '
+                'tab in the foreground and try again.</p>'
+            ),
+            message=(
+                'The board\'s HTTP server did not answer within 10 seconds. '
+                'Keep the simulation tab in the foreground and avoid blocking '
+                'work inside the request handler.'
+            ),
+            status_code=408,
         )
 
     # Forward response back to browser
