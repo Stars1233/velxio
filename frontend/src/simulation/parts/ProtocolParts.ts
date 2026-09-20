@@ -978,9 +978,15 @@ PartSimulationRegistry.register('microsd-card', {
     // silent the moment a card was dropped on the canvas — no wiring could
     // avoid it, which is what issue #343 was about. An unwired CS keeps the
     // old always-listening behaviour: nothing to share with.
+    // A rail is not a GPIO. The pin walk answers -1 for a pad that reaches
+    // GND or a supply, and subscribing to that waits for an edge that never
+    // comes — which would leave a card wired CS-to-GND (permanently selected
+    // on the bench, and a normal way to wire a card that is alone) silent for
+    // the whole run.
     const csPin = getPin('CS');
+    const csGpio = typeof csPin === 'number' && csPin >= 0 ? csPin : null;
     const pm = (simulator as any).pinManager;
-    let selected = csPin === null;
+    let selected = csGpio === null;
 
     // ── Backing store: sparse map of blockIndex -> 512-byte sector ──────────
     const store = new Map<number, Uint8Array>();
@@ -1221,8 +1227,8 @@ PartSimulationRegistry.register('microsd-card', {
     spi.onByte = spiChainTag(onByte, `sd:${(el?.id as string) ?? 'microsd'}`, chain);
 
     const csCleanup =
-      csPin !== null && pm
-        ? pm.onPinChange(csPin, (_p: number, level: boolean) => {
+      csGpio !== null && pm
+        ? pm.onPinChange(csGpio, (_p: number, level: boolean) => {
             const now = !level; // active low
             if (selected && !now) {
               // Letting go of CS ends the transaction: a command frame still

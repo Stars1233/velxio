@@ -96,7 +96,18 @@ export function connectChipInputsToSolve(): () => void {
   const unsub = useElectricalStore.subscribe((state, prev) => {
     if (state.nodeVoltages !== prev.nodeVoltages) writeChipInputs();
   });
+  // Forget what was pushed when the run is torn down and rebuilt. Stop and
+  // Reset are cold boots: PinManager.hardResetPinStates() wipes the synthetic
+  // chip pins, so a cache that still remembers a HIGH would skip re-emitting
+  // it and the chip would come back up seeing a level nobody is holding.
+  // Same reason the MCU connector clears its cache on a boards change.
+  const unsubBoards = useSimulatorStore.subscribe((state, prev) => {
+    if (state.boards !== prev.boards || state.hexEpoch !== prev.hexEpoch) lastState.clear();
+  });
   // Initial pass for examples that pre-populate the store before mount.
   writeChipInputs();
-  return () => unsub();
+  return () => {
+    unsub();
+    unsubBoards();
+  };
 }
