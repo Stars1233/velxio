@@ -12,12 +12,12 @@ import { spiChainTag, spiChainUnder, type SpiByteHandler } from '../simulation/p
 
 /** A listener that records what it is given and passes it on. */
 function listener(owner: string, seen: number[], current: SpiByteHandler | null) {
-  const prev = spiChainUnder(current, owner);
+  const chain = spiChainUnder(current, owner);
   const fn: SpiByteHandler = (b) => {
     seen.push(b);
-    prev?.(b);
+    chain.next?.(b);
   };
-  return spiChainTag(fn, owner, prev);
+  return spiChainTag(fn, owner, chain);
 }
 
 describe('the SPI byte channel', () => {
@@ -48,6 +48,24 @@ describe('the SPI byte channel', () => {
     expect(second).toEqual([0x77]);
     expect(first, 'the stale decoder is spliced out').toEqual([]);
     expect(card, 'what was under it still hears the bus').toEqual([0x77]);
+  });
+
+  it('splices a stale owner out of the MIDDLE of the chain, not just the head', () => {
+    // The chain a remount really builds: panel, then card on top, then the
+    // panel again. Its first instance is now buried one link down — and it
+    // would decode every byte a second time, advancing the address counter
+    // twice per pixel, if attaching only looked at the head.
+    const first: number[] = [];
+    const card: number[] = [];
+    const second: number[] = [];
+    let ch: SpiByteHandler | null = null;
+    ch = listener('tft:panel', first, ch);
+    ch = listener('sd:card', card, ch);
+    ch = listener('tft:panel', second, ch);
+    ch(0x55);
+    expect(second).toEqual([0x55]);
+    expect(card, 'the card is not ours to remove').toEqual([0x55]);
+    expect(first, 'the buried instance is gone').toEqual([]);
   });
 
   it('keeps ordinary chains untouched when nothing shares an owner', () => {

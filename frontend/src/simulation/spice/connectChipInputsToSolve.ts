@@ -69,13 +69,21 @@ export function connectChipInputsToSolve(): () => void {
         if (!net) continue;
         const v = nodeVoltages[net];
         if (v == null) continue;
+        // Not a level: ngspice hands back NaN for every node of a transient
+        // step that did not converge, and it fails both threshold tests, so it
+        // used to fall through to the default below and take every chip input
+        // down at once. Same guard as the MCU path (issue #333).
+        if (!Number.isFinite(v)) continue;
 
         const synth = syntheticChipPin(comp.id, pinName);
         const prev = lastState.get(synth);
         let next: boolean;
         if (v >= V_HIGH) next = true;
         else if (v <= V_LOW) next = false;
-        else next = prev ?? false; // inside the hysteresis band — hold
+        else if (prev !== undefined) next = prev; // inside the band — hold
+        // Nothing to hold and nothing the band decides: say nothing rather
+        // than invent a falling edge the circuit never asked for.
+        else continue;
         if (prev === next) continue;
         lastState.set(synth, next);
         pinManager.triggerPinChange(synth, next);

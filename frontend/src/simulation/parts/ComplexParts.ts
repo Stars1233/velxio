@@ -1,4 +1,5 @@
 import { PartSimulationRegistry } from './PartSimulationRegistry';
+import { spiChainTag, spiChainUnder } from './spiChannel';
 import type { AnySimulator } from './PartSimulationRegistry';
 import { RP2040Simulator } from '../RP2040Simulator';
 import { getADC, setAdcVoltage, emitPropertyChange } from './partUtils';
@@ -1115,12 +1116,23 @@ const ili9341Simulation = {
         // Portrait (rotations 0 or 2)
         physX = madMY ? (SCREEN_W - 1) - curX : curX;
         physY = madMY ? (SCREEN_H - 1) - curY : curY;
-      } else if (!madMX && !madMY) {
-        // Landscape rotation 1: m = MV | BGR. (curY, 319 - curX)
+      } else if (!madMX) {
+        // Landscape, turned one way: MV with the column order left alone.
+        // Adafruit's rotation 1 (m = MV | BGR) and LovyanGFX's rotation 3
+        // (m = MV | MY | ML) both land here.
         physX = curY;
         physY = (SCREEN_H - 1) - curX;
       } else {
-        // Landscape rotation 3: m = MX | MY | MV | BGR. (239 - curY, curX)
+        // Landscape, turned the other way: MV with the column order reversed.
+        // Adafruit's rotation 3 (m = MX | MY | MV | BGR) and LovyanGFX's
+        // rotation 1 (m = MV | MX | MH).
+        //
+        // Asking "neither mirror bit" instead of "is MX set" is an
+        // Adafruit-shaped question: it always sets MX and MY together, so its
+        // pair agrees. LovyanGFX sets ONE of them per landscape rotation, so
+        // both of its landscapes fell in the same branch and rendered
+        // identically — and touch, which a driver rotates by the rotation the
+        // panel is in, then disagreed with the picture (issue #338).
         physX = (SCREEN_W - 1) - curY;
         physY = curX;
       }
@@ -1225,19 +1237,31 @@ const ili9341Simulation = {
     // completeTransfer to drive MISO. AVR and RP2040 actually use
     // completeTransfer; ESP32 ignores it (worker drives MISO via
     // its own _spi_response global).
-    const prevOnByte = spi.onByte;
-    spi.onByte = (value: number) => {
+    // `spi.onByte` holds ONE listener, and this panel is rarely alone on its
+    // bus — an SD card is wired to the same SCK/MOSI on every TFT+SD project.
+    // Taking the channel outright muted whatever was already on it (issue
+    // #343), so the byte is passed along; everything else in the chain gates
+    // on its own chip select, so hearing it costs nothing. MISO is driven
+    // before forwarding, on purpose: a device downstream that IS selected
+    // overwrites the idle byte with its real answer.
+    const owner = `ili9341:${(el?.id as string) || 'panel'}`;
+    const chain = spiChainUnder(spi.onByte, owner);
+    const onByte = (value: number) => {
       if (!dcState) processCommand(value);
       else          processData(value);
       // Idle-byte response — the typical ILI9341 driver writes only,
       // so any value works. 0xff matches what the prior AVR path
       // returned to keep behaviour stable.
       spi.completeTransfer?.(0xff);
+      chain.next?.(value);
     };
+    spi.onByte = spiChainTag(onByte, owner, chain);
 
     // ── Cleanup ───────────────────────────────────────────────────────
     return () => {
-      spi.onByte = prevOnByte;
+      // Only hand the channel back if it is still ours: a part that attached
+      // after us owns it now, and restoring over it would mute IT instead.
+      if (spi.onByte === onByte) spi.onByte = chain.next ?? null;
       if (idleTimerId !== null) clearTimeout(idleTimerId);
       el.removeEventListener('canvas-ready', onCanvasReady);
       unsubscribers.forEach((u) => u());

@@ -203,6 +203,12 @@ export function connectAnalogInputsToMcu(): () => void {
         if (sourcedNets.size > 0 && !sourcedNets.has(netName)) continue;
         const v = nodeVoltages[netName];
         if (v == null) continue;
+        // A number the solver could not produce is not a voltage. ngspice
+        // answers a transient step it cannot take with NaN for every node at
+        // once, and NaN survives Math.max/Math.min unchanged — so the ADC
+        // would read it as a conversion. Hold the last real one instead.
+        // Same guard as the digital path (issue #333).
+        if (!Number.isFinite(v)) continue;
         const clamped = Math.max(0, Math.min(vMax, v));
         const gpioPin = gpioForBoardPin(board.boardKind, pinName, channel);
         if (gpioPin < 0) continue;

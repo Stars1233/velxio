@@ -1158,12 +1158,12 @@ PartSimulationRegistry.register('microsd-card', {
       }
     };
 
-    const prevOnByte = spiChainUnder(spi.onByte, `sd:${(el?.id as string) ?? 'microsd'}`);
+    const chain = spiChainUnder(spi.onByte, `sd:${(el?.id as string) ?? 'microsd'}`);
 
     const onByte = (byte: number) => {
       // Not ours: the bus belongs to whatever else is wired to it.
       if (!selected) {
-        prevOnByte?.(byte);
+        chain.next?.(byte);
         return;
       }
       // Full-duplex: the MISO shifted out for THIS transfer was prepared by
@@ -1218,7 +1218,7 @@ PartSimulationRegistry.register('microsd-card', {
           break;
       }
     };
-    spi.onByte = spiChainTag(onByte, `sd:${(el?.id as string) ?? 'microsd'}`, prevOnByte);
+    spi.onByte = spiChainTag(onByte, `sd:${(el?.id as string) ?? 'microsd'}`, chain);
 
     const csCleanup =
       csPin !== null && pm
@@ -1239,7 +1239,7 @@ PartSimulationRegistry.register('microsd-card', {
       csCleanup?.();
       // Only give the channel back if it is still ours — a part that attached
       // after us owns it now, and clobbering that would mute IT instead.
-      if (spi.onByte === onByte) spi.onByte = prevOnByte ?? null;
+      if (spi.onByte === onByte) spi.onByte = chain.next ?? null;
       respQueue.length = 0;
       cmdBuf = [];
       store.clear();

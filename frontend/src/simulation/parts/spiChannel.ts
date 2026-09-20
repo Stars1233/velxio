@@ -19,31 +19,50 @@
  */
 
 const OWNER = '__velxioSpiOwner';
-const PREV = '__velxioSpiPrev';
+const LINK = '__velxioSpiLink';
 
 export type SpiByteHandler = (byte: number) => void;
-type Chained = SpiByteHandler & { [OWNER]?: string; [PREV]?: SpiByteHandler | null };
+/** What a chained listener forwards to. Mutable, and read at call time, so a
+ *  listener can be spliced out of the middle of a chain after the fact. */
+export interface SpiChainLink {
+  next: SpiByteHandler | null;
+}
+type Chained = SpiByteHandler & { [OWNER]?: string; [LINK]?: SpiChainLink };
 
 /**
- * The handler a new listener owned by `owner` should chain to: whatever is on
- * the channel now, with any earlier incarnation of `owner` spliced out.
+ * The link a new listener owned by `owner` should forward through: the channel
+ * as it stands, with every earlier incarnation of `owner` removed — wherever it
+ * sits, not just at the head. A stale listener one link down would otherwise
+ * keep hearing the bus and decode every byte a second time.
+ *
+ * A handler that was assigned without this helper is opaque: the walk stops at
+ * it, since there is no link to re-point.
  */
 export function spiChainUnder(
   current: SpiByteHandler | null | undefined,
   owner: string,
-): SpiByteHandler | null {
-  let h = (current ?? null) as Chained | null;
-  while (h && h[OWNER] === owner) h = (h[PREV] ?? null) as Chained | null;
-  return h;
+): SpiChainLink {
+  const mine = (h: Chained | null): boolean => !!h && h[OWNER] === owner;
+  const under = (h: Chained | null): Chained | null => (h?.[LINK]?.next ?? null) as Chained | null;
+
+  let head = (current ?? null) as Chained | null;
+  while (mine(head)) head = under(head);
+
+  for (let node = head; node && node[LINK]; node = node[LINK].next as Chained | null) {
+    let nxt = node[LINK].next as Chained | null;
+    while (mine(nxt)) nxt = under(nxt);
+    node[LINK].next = nxt;
+  }
+  return { next: head };
 }
 
-/** Tag `handler` as owned by `owner`, sitting on top of `prev`. */
+/** Tag `handler` as owned by `owner`, forwarding through `link`. */
 export function spiChainTag(
   handler: SpiByteHandler,
   owner: string,
-  prev: SpiByteHandler | null,
+  link: SpiChainLink,
 ): SpiByteHandler {
   (handler as Chained)[OWNER] = owner;
-  (handler as Chained)[PREV] = prev;
+  (handler as Chained)[LINK] = link;
   return handler;
 }
