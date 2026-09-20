@@ -1,6 +1,7 @@
 import { RP2040, GPIOPinState, ConsoleLogger, LogLevel, USBCDC } from 'rp2040js';
 import type { RPI2C } from 'rp2040js';
 import { PinManager } from './PinManager';
+import { ExternalPinScopeFeed } from './externalPinScope';
 import { I2CBusManager, wireRpI2cToBus, nullI2CMaster } from './I2CBusManager';
 import type { I2CDevice } from './I2CBusManager';
 import { bootromB1 } from './rp2040-bootrom';
@@ -249,6 +250,13 @@ export class RP2040Simulator implements LineCapable {
   public pinManager: PinManager;
   private speed = 1.0;
   private gpioUnsubscribers: Array<() => void> = [];
+  /**
+   * The other half of a digital scope channel: levels the CIRCUIT puts on a
+   * pin. `GPIOPin.setInputValue` notifies nobody, and an input pin's listener
+   * state is a PULL, not a level — so until this existed a probed button pin
+   * drew nothing at all. Same clock as the driven edges below.
+   */
+  private externalScope = new ExternalPinScopeFeed(() => this.clockMs());
   private flashCopy: Uint8Array | null = null;
   private totalCycles = 0;
   private scheduledPinChanges: Array<{ cycle: number; pin: number; state: boolean }> = [];
@@ -994,8 +1002,11 @@ export class RP2040Simulator implements LineCapable {
           // auto-apply the pad pull to the readable input register). The
           // connector overrides this whenever the pin's net is actually sourced
           // (rail / button / divider); an unwired pulled input keeps this level.
-          if (pull === 1) gpio.setInputValue(true);
-          else if (pull === 2) gpio.setInputValue(false);
+          // Through setPinState, not gpio.setInputValue: the scope has to see
+          // this baseline too, or a channel probed on a pulled input stays
+          // empty until something in the circuit moves it.
+          if (pull === 1) this.setPinState(pin, true);
+          else if (pull === 2) this.setPinState(pin, false);
           requestElectricalResolve();
           // The pad was RELEASED. This is the event the level channel above
           // cannot carry (no level moved, so `triggerPinChange` must stay
@@ -1009,13 +1020,10 @@ export class RP2040Simulator implements LineCapable {
         const isHigh = state === GPIOPinState.High;
         this.pinManager.reportPad(pin, isHigh ? 'high' : 'low', 0, this.totalCycles);
         this.pinManager.triggerPinChange(pin, isHigh, 'mcu');
-        if (this.onPinChangeWithTime && this.rp2040) {
-          // IClock interface exposes `nanos` (not `timeUs`)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const clk = (this.rp2040 as any).clock;
-          const timeMs = clk ? (clk.nanos as number) / 1_000_000 : 0;
-          this.onPinChangeWithTime(pin, isHigh, timeMs);
-        }
+        // The core owns the pad now, so the external door's memory of this pin
+        // is stale (see externalPinScope).
+        this.externalScope.forget(pin);
+        this.onPinChangeWithTime?.(pin, isHigh, this.clockMs());
       });
       this.gpioUnsubscribers.push(unsub);
     }
@@ -1203,6 +1211,7 @@ export class RP2040Simulator implements LineCapable {
     this.totalCycles = 0;
     this.scheduledPinChanges = [];
     this.lines?.reset();
+    this.externalScope.reset();
     this.idleDetector.reset();
     if (this.rp2040 && this.flashCopy) {
       if (this.micropythonMode) {
@@ -1267,6 +1276,17 @@ export class RP2040Simulator implements LineCapable {
 
   getSpeed(): number {
     return this.speed;
+  }
+
+  /** Guest time in ms, the base every digital scope sample on this board uses. */
+  private clockMs(): number {
+    // IClock interface exposes `nanos` (not `timeUs`)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const clk = this.rp2040
+      ? // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        ((this.rp2040 as any).clock as { nanos?: number } | undefined)
+      : undefined;
+    return clk?.nanos != null ? clk.nanos / 1_000_000 : 0;
   }
 
   /** Returns the CPU clock frequency in Hz. */
@@ -1347,9 +1367,17 @@ export class RP2040Simulator implements LineCapable {
   setPinState(arduinoPin: number, state: boolean): void {
     if (!this.rp2040) return;
     const gpio = this.rp2040.gpio[arduinoPin];
-    if (gpio) {
-      gpio.setInputValue(state);
-    }
+    if (!gpio) return;
+    gpio.setInputValue(state);
+    // Report it to the scope here or nowhere: setInputValue notifies no
+    // listener, and for an input pin the listener's state is the pad's PULL
+    // rather than its level (see externalPinScope). A pin the core drives is
+    // left out because the pad ignores the injected value there — asked of the
+    // pad, not of `pinManager.getOutputPins()`, which is sticky by design and
+    // would drop a bidirectional line's answer (a DHT22 replying after the
+    // sketch released DATA) for the rest of the session.
+    if (gpio.outputEnable) return;
+    this.externalScope.emit(this.onPinChangeWithTime, arduinoPin, state);
   }
 
   /**

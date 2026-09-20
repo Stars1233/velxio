@@ -13,6 +13,7 @@ import { RP2040Simulator } from '../simulation/RP2040Simulator';
 import { RiscVSimulator } from '../simulation/RiscVSimulator';
 import { Esp32C3Simulator } from '../simulation/Esp32C3Simulator';
 import { PinManager } from '../simulation/PinManager';
+import { ExternalPinScopeFeed } from '../simulation/externalPinScope';
 import { SignalRouter } from '../simulation/SignalRouter';
 import { requestElectricalResolve } from '../simulation/spice/electricalResolveHook';
 import { ledcSignalForChannel } from '../simulation/esp32-signals';
@@ -171,6 +172,8 @@ export class Esp32BridgeShim {
   onSerialData: ((ch: string) => void) | null = null;
   onPinChangeWithTime: ((pin: number, state: boolean, timeMs: number) => void) | null = null;
   onBaudRateChange: ((baud: number) => void) | null = null;
+  /** Levels the circuit applies; the engine only reports the ones it drives. */
+  private externalScope = new ExternalPinScopeFeed(() => performance.now());
   private bridge: Esp32Bridge;
 
   /**
@@ -232,6 +235,31 @@ export class Esp32BridgeShim {
 
   setPinState(pin: number, state: boolean): void {
     this.bridge.sendPinEvent(pin, state);
+    this.reportExternalLevel(pin, state);
+  }
+
+  /**
+   * Show the oscilloscope a level the CIRCUIT applied.
+   *
+   * The engine reports `gpio_change` when the FIRMWARE drives a pad; an
+   * `esp32_gpio_in` injection moves the guest's GPIO_IN register and comes
+   * back as nothing, so a probed button pin drew the last driven level for
+   * ever (see simulation/externalPinScope). Skipped when the bridge dropped
+   * the injection because a backend sensor owns that line — reporting a level
+   * that was never applied is the one thing worse than reporting none.
+   * `performance.now()` is deliberate: it is the clock the bridge stamps its
+   * own edges with.
+   */
+  private reportExternalLevel(pin: number, state: boolean): void {
+    if (this.bridge.ownsSensorPin(pin)) return;
+    // The pad lives in another process, so its drive can only be asked of the
+    // sticky "has driven this session" set — the same gate the connector uses
+    // to decide what to inject in the first place.
+    if (this.pinManager.getOutputPins().has(pin)) return;
+    // The store hands the scope callback to the BRIDGE (that is where the
+    // engine's own edges arrive), so that is the sink to reach for; the
+    // shim's own slot is honoured first for the tests that fill it.
+    this.externalScope.emit(this.onPinChangeWithTime ?? this.bridge.onPinChangeWithTime, pin, state);
   }
 
   /**
@@ -960,6 +988,8 @@ class Stm32BridgeShim {
   onSerialData: ((ch: string) => void) | null = null;
   onPinChangeWithTime: ((pin: number, state: boolean, timeMs: number) => void) | null = null;
   onBaudRateChange: ((baud: number) => void) | null = null;
+  /** Levels the circuit applies; the worker only reports the ones it drives. */
+  private externalScope = new ExternalPinScopeFeed(() => performance.now());
   private bridge: Stm32Bridge;
   private i2cBusInstance: I2CBusManager;
   private _i2cTransactionListeners = new Map<number, (data: number[]) => void>();
@@ -987,6 +1017,12 @@ class Stm32BridgeShim {
   /** Drive a GPIO input from a part. `pin` is the linear pin (port*16+pin). */
   setPinState(pin: number, state: boolean): void {
     this.bridge.sendPinEvent(pin, state);
+    // …and tell the scope, which otherwise only ever hears the edges the
+    // firmware drives (see simulation/externalPinScope). The sink lives on the
+    // bridge, where the worker's own edges arrive, and carries the same
+    // `performance.now()` clock they are stamped with.
+    if (this.pinManager.getOutputPins().has(pin)) return;
+    this.externalScope.emit(this.onPinChangeWithTime ?? this.bridge.onPinChangeWithTime, pin, state);
   }
 
   /**

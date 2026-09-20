@@ -12,6 +12,7 @@
 
 import { RiscVCore } from './RiscVCore';
 import type { PinManager } from './PinManager';
+import { ExternalPinScopeFeed } from './externalPinScope';
 import { hexToUint8Array } from '../utils/hexParser';
 import { parseMergedFlashImage } from '../utils/esp32ImageParser';
 
@@ -167,6 +168,8 @@ export class Esp32C3Simulator {
   public onSerialData: ((ch: string) => void) | null = null;
   public onBaudRateChange: ((baud: number) => void) | null = null;
   public onPinChangeWithTime: ((pin: number, state: boolean, timeMs: number) => void) | null = null;
+  /** The other half of that channel: levels the CIRCUIT applies (setPinState). */
+  private externalScope = new ExternalPinScopeFeed(() => (this.core.cycles / CPU_HZ) * 1000);
 
   constructor(pinManager: PinManager) {
     this.pinManager = pinManager;
@@ -305,6 +308,7 @@ export class Esp32C3Simulator {
               console.log(
                 `[ESP32-C3] GPIO${bit} → ${state ? 'HIGH' : 'LOW'} @ ${timeMs.toFixed(1)}ms`,
               );
+              this.externalScope.forget(bit);
               this.onPinChangeWithTime?.(bit, state, timeMs);
               this.pinManager.setPinState(bit, state, 'mcu');
             }
@@ -1406,6 +1410,7 @@ export class Esp32C3Simulator {
     this.rxFifo = [];
     this.gpioOut = 0;
     this.gpioIn = 0;
+    this.externalScope.reset();
     this._stIntEna = 0;
     this._stIntRaw = 0;
     this._periRegs.clear();
@@ -1425,6 +1430,17 @@ export class Esp32C3Simulator {
   setPinState(pin: number, state: boolean): void {
     if (state) this.gpioIn |= 1 << pin;
     else this.gpioIn &= ~(1 << pin);
+    // Writing GPIO_IN tells the firmware, and nobody else. The scope's digital
+    // source is the GPIO_OUT watcher above, which by definition never sees a
+    // level the circuit applied (see externalPinScope), so a probed button pin
+    // drew the last driven level forever.
+    //
+    // This core does not model GPIO_ENABLE (reads answer 0xff), so the pad's
+    // drive cannot be asked directly the way it can on AVR/RP2040: the sticky
+    // "has driven this session" set is the closest thing there is, and it is
+    // the same gate connectDigitalInputsToMcu uses to decide what to inject.
+    if (this.pinManager.getOutputPins().has(pin)) return;
+    this.externalScope.emit(this.onPinChangeWithTime, pin, state);
   }
 
   isRunning(): boolean {

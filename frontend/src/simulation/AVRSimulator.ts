@@ -35,6 +35,7 @@ import type { AVRTimerConfig } from 'avr8js/dist/esm/peripherals/timer';
 import type { ADCConfig, ADCMuxConfiguration } from 'avr8js/dist/esm/peripherals/adc';
 import { ADCMuxInputType, ADCReference } from 'avr8js/dist/esm/peripherals/adc';
 import { PinManager } from './PinManager';
+import { ExternalPinScopeFeed } from './externalPinScope';
 import type { LineCapable, LineHostPort, LineSupport } from './line/LineHost';
 import { LineSensorHub } from './line/LineSensorHub';
 import { hexToUint8Array } from '../utils/hexParser';
@@ -297,6 +298,31 @@ const MEGA_PORT_CONFIGS = [
   { name: 'PORTL', config: portLConfig },
 ];
 
+/**
+ * DDR register address per ATmega2560 port. Module scope because two things
+ * need it: the port listeners (which pass the mask to PinManager) and
+ * `mcuDrives`, the "is the sketch driving this pad right now" question.
+ */
+const MEGA_DDR_ADDRS: Record<string, number> = {
+  PORTA: 0x21,
+  PORTB: 0x24,
+  PORTC: 0x27,
+  PORTD: 0x2a,
+  PORTE: 0x2d,
+  PORTF: 0x30,
+  PORTG: 0x33,
+  PORTH: 0x101,
+  PORTJ: 0x104,
+  PORTK: 0x107,
+  PORTL: 0x10a,
+};
+
+/** DDR addresses for the single-port variants. ATtiny85 has PORTB only. */
+const UNO_DDRD = 0x2a;
+const UNO_DDRB = 0x24;
+const UNO_DDRC = 0x27;
+const TINY85_DDRB = 0x37;
+
 export class AVRSimulator implements LineCapable {
   // Digital input pins are driven from the SPICE solve
   // (connectDigitalInputsToMcu) for nets backed by a real source/element, so
@@ -373,6 +399,15 @@ export class AVRSimulator implements LineCapable {
    * Used by the oscilloscope / logic analyzer.
    */
   public onPinChangeWithTime: ((pin: number, state: boolean, timeMs: number) => void) | null = null;
+  /**
+   * The other half of that channel: levels the CIRCUIT puts on a pin.
+   * avr8js notifies a port listener on a PORT/DDR write and on nothing else,
+   * so a button pulling an INPUT_PULLUP pad to GND moved the PIN register —
+   * digitalRead saw it — while the scope kept drawing the pull-up's HIGH.
+   */
+  private externalScope = new ExternalPinScopeFeed(() =>
+    this.cpu ? this.cpu.cycles / (this.clockFrequency / 1000) : 0,
+  );
   private lastPortBValue = 0;
   private lastPortCValue = 0;
   private lastPortDValue = 0;
@@ -757,6 +792,10 @@ export class AVRSimulator implements LineCapable {
         const pin = pinMap ? pinMap[bit] : offset + bit;
         if (pin < 0) continue;
         const state = (newVal & (1 << bit)) !== 0;
+        // The core just drove this pad, so whatever the external door last
+        // reported here is stale: the next injected level must be reported
+        // even when it repeats that memory.
+        this.externalScope.forget(pin);
         this.onPinChangeWithTime(pin, state, timeMs);
       }
     }
@@ -800,19 +839,6 @@ export class AVRSimulator implements LineCapable {
       });
     } else if (this.boardVariant === 'mega') {
       // Mega: use explicit per-bit pin maps for all 11 ports
-      const MEGA_DDR_ADDRS: Record<string, number> = {
-        PORTA: 0x21,
-        PORTB: 0x24,
-        PORTC: 0x27,
-        PORTD: 0x2a,
-        PORTE: 0x2d,
-        PORTF: 0x30,
-        PORTG: 0x33,
-        PORTH: 0x101,
-        PORTJ: 0x104,
-        PORTK: 0x107,
-        PORTL: 0x10a,
-      };
       for (const [portName, port] of this.megaPorts) {
         const pinMap = MEGA_PORT_BIT_MAP[portName];
         const ddrAddr = MEGA_DDR_ADDRS[portName];
@@ -1001,6 +1027,7 @@ export class AVRSimulator implements LineCapable {
     }
     this.scheduledPinChanges = [];
     this.lines?.reset();
+    this.externalScope.reset();
 
     // Drop any bytes the previous run had queued for the sketch's RX
     // but never delivered (RX disabled, busy, or the sketch hadn't
@@ -1022,6 +1049,7 @@ export class AVRSimulator implements LineCapable {
     // over with the CPU.
     this.scheduledPinChanges = [];
     this.lines?.reset();
+    this.externalScope.reset();
     if (this.program) {
       // Re-use the stored hex content path: just reload
       const sramBytes =
@@ -1149,27 +1177,55 @@ export class AVRSimulator implements LineCapable {
   setPinState(arduinoPin: number, state: boolean): void {
     if (this.boardVariant === 'mega') {
       const entry = MEGA_PIN_TO_PORT[arduinoPin];
-      if (entry) {
-        const port = this.megaPorts.get(entry.portName);
-        port?.setPin(entry.bit, state);
-      }
-      return;
-    }
-    if (this.boardVariant === 'tiny85') {
+      if (!entry) return;
+      this.megaPorts.get(entry.portName)?.setPin(entry.bit, state);
+    } else if (this.boardVariant === 'tiny85') {
       // ATtiny85: PB0-PB5 = pins 0-5
-      if (arduinoPin >= 0 && arduinoPin <= 5 && this.portB) {
-        this.portB.setPin(arduinoPin, state);
-      }
-      return;
-    }
-    // Uno / Nano
-    if (arduinoPin >= 0 && arduinoPin <= 7 && this.portD) {
+      if (!(arduinoPin >= 0 && arduinoPin <= 5 && this.portB)) return;
+      this.portB.setPin(arduinoPin, state);
+    } else if (arduinoPin >= 0 && arduinoPin <= 7 && this.portD) {
       this.portD.setPin(arduinoPin, state);
     } else if (arduinoPin >= 8 && arduinoPin <= 13 && this.portB) {
       this.portB.setPin(arduinoPin - 8, state);
     } else if (arduinoPin >= 14 && arduinoPin <= 19 && this.portC) {
       this.portC.setPin(arduinoPin - 14, state);
+    } else {
+      return; // not a pad this variant has
     }
+    // The oscilloscope hears about an injected level HERE or not at all:
+    // avr8js's port listeners, which firePinChangeWithTime rides on, fire on
+    // PORT/DDR writes only. A pin the sketch drives as an OUTPUT is left out
+    // because silicon leaves it out — setPin moves the PIN register for bits
+    // whose DDR says input, so reporting it would draw a level the pad does
+    // not have.
+    if (this.mcuDrives(arduinoPin)) return;
+    this.externalScope.emit(this.onPinChangeWithTime, arduinoPin, state);
+  }
+
+  /**
+   * Is the sketch DRIVING this pad right now?
+   *
+   * Asked of the DDR register rather than `pinManager.getOutputPins()`,
+   * because that set is sticky by design — "pins the MCU has driven this
+   * session" — and a bidirectional line stays in it for ever. A DHT22's DATA
+   * pin is driven low by the sketch's start signal and then released for the
+   * sensor to answer on; with the sticky set as the guard, every bit of that
+   * answer would be dropped on the way to the scope.
+   */
+  private mcuDrives(pin: number): boolean {
+    const cpu = this.cpu;
+    if (!cpu) return false;
+    const ddrAt = (addr: number, bit: number) => ((cpu.data[addr] ?? 0) & (1 << bit)) !== 0;
+    if (this.boardVariant === 'mega') {
+      const entry = MEGA_PIN_TO_PORT[pin];
+      const addr = entry ? MEGA_DDR_ADDRS[entry.portName] : undefined;
+      return addr !== undefined && entry !== undefined && ddrAt(addr, entry.bit);
+    }
+    if (this.boardVariant === 'tiny85') return pin <= 5 && ddrAt(TINY85_DDRB, pin);
+    if (pin <= 7) return ddrAt(UNO_DDRD, pin);
+    if (pin <= 13) return ddrAt(UNO_DDRB, pin - 8);
+    if (pin <= 19) return ddrAt(UNO_DDRC, pin - 14);
+    return false;
   }
 
   /**
