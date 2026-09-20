@@ -2291,6 +2291,7 @@ export const useSimulatorStore = create<SimulatorState>((set, get) => {
         // P2.4 — restore per-board persisted fields that ride in boards_json.
         if (b.boardOptions) patch.boardOptions = b.boardOptions;
         if (b.spiffsFiles) patch.spiffsFiles = b.spiffsFiles;
+        if (b.sdFiles?.length) patch.sdFiles = b.sdFiles;
         if (b.libraries && b.libraries.length) patch.libraries = b.libraries;
         if (Object.keys(patch).length > 0) {
           set((s) => ({

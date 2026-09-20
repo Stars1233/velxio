@@ -49,6 +49,11 @@ function serialisableBoard(b: BoardInstance) {
     // inside boards_json so there's no DB migration.
     boardOptions: b.boardOptions,
     spiffsFiles: b.spiffsFiles,
+    // Files the user put on the board's built-in microSD. Same shape and same
+    // reasoning as spiffsFiles above — an upload is the user's input, not
+    // derived data like compiledProgram, so it belongs to the project. Without
+    // this a project saved with files on its card came back with an empty one.
+    sdFiles: b.sdFiles,
     // P2.4 — this board's declared library manifest (compile scope). Rides in
     // boards_json so it round-trips, dirty-checks and autosaves for free.
     libraries: b.libraries,
