@@ -1,3 +1,4 @@
+import { useSimulatorStore } from '../../store/useSimulatorStore';
 import { PartSimulationRegistry } from './PartSimulationRegistry';
 import { spiChainDetach, spiChainTag, spiChainUnder } from './spiChannel';
 import type { AnySimulator } from './PartSimulationRegistry';
@@ -623,7 +624,7 @@ PartSimulationRegistry.register('buzzer', {
       if (onWhen !== null && off < onWhen + ATTACK + 0.002) off = onWhen + ATTACK + 0.002;
       if (off < ctx.currentTime + 0.003) off = ctx.currentTime + 0.003;
       try {
-        activeGain.gain.setValueAtTime(0.1, off);
+        activeGain.gain.setValueAtTime(dutyLevel, off);
         activeGain.gain.linearRampToValueAtTime(0, off + RELEASE);
         activeOsc.stop(off + RELEASE + 0.001);
       } catch {
@@ -632,6 +633,22 @@ PartSimulationRegistry.register('buzzer', {
       activeOsc = null;
       activeGain = null;
     }
+
+    /** How loud a square wave of this duty cycle is.
+     *
+     *  A passive buzzer is driven by the pin, and what it puts out is the
+     *  fundamental of that square wave — whose amplitude is sin(pi * duty).
+     *  Loudest at 50%, and fading to nothing as the duty approaches either
+     *  rail, where the pin is barely moving. So analogWrite() on a buzzer
+     *  changes the volume, which is what people use it for, and tone() (a
+     *  square wave at 50%) is unaffected: sin(pi/2) is 1.
+     *
+     *  Duty is only known on the PWM path; a tone driven by plain HIGH/LOW
+     *  edges passes nothing and gets the full level. */
+    const PEAK = 0.1;
+    let dutyLevel = PEAK;
+    const levelForDuty = (duty: number) =>
+      PEAK * Math.sin(Math.PI * Math.min(1, Math.max(0, duty)));
 
     function startTone(freq: number, timeMs?: number) {
       ensureCtx();
@@ -650,7 +667,7 @@ PartSimulationRegistry.register('buzzer', {
       osc.frequency.value = freq; // fixed for the life of this note (no live change)
       const g = ctx.createGain();
       g.gain.setValueAtTime(0, when);
-      g.gain.linearRampToValueAtTime(0.1, when + ATTACK);
+      g.gain.linearRampToValueAtTime(dutyLevel, when + ATTACK);
       osc.connect(g);
       g.connect(ctx.destination);
       osc.start(when);
@@ -687,6 +704,24 @@ PartSimulationRegistry.register('buzzer', {
     // Poll via PWM duty cycle on the buzzer pin
     const unsubscribers: (() => void)[] = [];
 
+    // Stop means silence. A buzzer makes sound because a pin is driving it, so
+    // when the board stops there is nothing left to drive it — but parts
+    // deliberately survive a Stop (a display keeps its picture, an I2C part
+    // keeps its state), so nothing was ending the note: the last tone played
+    // on for ever and only Reset, which remounts the part and runs its
+    // cleanup, could silence it (issue #351).
+    //
+    // `every` rather than `some`: with two boards on the canvas, stopping one
+    // must not cut off a buzzer the other one is still driving.
+    let wasRunning = useSimulatorStore.getState().boards.some((b) => b.running);
+    unsubscribers.push(
+      useSimulatorStore.subscribe((state) => {
+        const running = state.boards.some((b) => b.running);
+        if (wasRunning && !running) stopTone();
+        wasRunning = running;
+      }),
+    );
+
     if (pinSIG !== null && pinManager) {
       unsubscribers.push(
         pinManager.onPwmChange(pinSIG, (_: number, dc: number, timeMs?: number) => {
@@ -694,6 +729,7 @@ PartSimulationRegistry.register('buzzer', {
           const cpu = (avrSimulator as any).cpu;
           if (dc > 0) {
             const freq = cpu ? getFrequency(cpu) : 440;
+            dutyLevel = levelForDuty(dc);
             startTone(Math.max(20, Math.min(20000, freq)), timeMs);
           } else {
             stopTone(timeMs);

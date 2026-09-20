@@ -18,6 +18,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PartSimulationRegistry } from '../simulation/parts/PartSimulationRegistry';
 import '../simulation/parts/ComplexParts';
+import { useSimulatorStore } from '../store/useSimulatorStore';
 
 // ── Controllable audio clock + schedule recorder ─────────────────────────────
 let clock = 0; // seconds; we advance it to emulate real time passing
@@ -36,12 +37,15 @@ function mockOscillator() {
   };
   return o;
 }
+const gains: any[] = [];
 function mockGain() {
-  return {
+  const g = {
     gain: { value: 0, setValueAtTime: vi.fn(), linearRampToValueAtTime: vi.fn() },
     connect: vi.fn(),
     disconnect: vi.fn(),
   };
+  gains.push(g);
+  return g;
 }
 class MockAudioContext {
   state = 'running';
@@ -62,6 +66,7 @@ class MockAudioContext {
 beforeEach(() => {
   clock = 0;
   sched = [];
+  gains.length = 0;
   vi.stubGlobal('AudioContext', MockAudioContext as unknown as typeof AudioContext);
 });
 afterEach(() => {
@@ -76,6 +81,14 @@ const TCCR2B = 0xb1;
 const ocrFor = (freq: number) => Math.floor(125000 / freq) - 1;
 const ACCENT = ocrFor(1500); // 82 -> 1506 Hz
 const BEAT = ocrFor(1100); //   112 -> 1106 Hz
+
+// Every part attached by a test, torn down after it. The buzzer subscribes to
+// the store now, so a part left attached goes on reacting to the NEXT test's
+// state changes and scheduling stops for its own stale note.
+const attached: Array<() => void> = [];
+afterEach(() => {
+  while (attached.length) attached.pop()!();
+});
 
 function setupBuzzer() {
   const sim: any = {
@@ -94,6 +107,7 @@ function setupBuzzer() {
     sim,
     (name: string) => (name === '1' ? 11 : null),
   );
+  attached.push(cleanup);
   return { sim, cleanup, hit: (ocr: number, simMs: number, clickMs = 25) => {
     // onset: OCR set, PWM duty > 0 at simMs
     sim.cpu.data[OCR2A] = ocr;
@@ -292,5 +306,75 @@ describe('Buzzer — metronome quality', () => {
     // last) is still live. Pre-guard this was starts=3, stops=0 (all orphaned).
     expect(starts.length).toBe(melody.length);
     expect(stops.length).toBe(starts.length - 1);
+  });
+
+  // ── Stop means silence ─────────────────────────────────────────────────
+  // A buzzer sounds because a pin is driving it; when the board stops, nothing
+  // is. Parts deliberately survive a Stop — a display keeps its picture — so
+  // nothing ended the note, and the last tone played on until Reset remounted
+  // the part. A user could only silence it by resetting (issue #351).
+  it('ends the note when the board stops, without waiting for a reset', () => {
+    const { sim } = setupBuzzer();
+    useSimulatorStore.setState({ boards: [{ running: true }] as never });
+    const pwm = (sim.pinManager.onPwmChange as ReturnType<typeof vi.fn>).mock.calls[0][1] as (
+      p: number,
+      dc: number,
+      t?: number,
+    ) => void;
+
+    sim.cpu.data[OCR2A] = ocrFor(440);
+    sim.cpu.data[TCCR2B] = 0x04;
+    clock = 0;
+    pwm(11, 0.5, 0); // a tone with no note-off: it would ring for ever
+    expect(sched.filter((e) => e.kind === 'start').length).toBe(1);
+    expect(sched.filter((e) => e.kind === 'stop').length, 'still sounding').toBe(0);
+
+    clock = 1;
+    useSimulatorStore.setState({ boards: [{ running: false }] as never });
+    expect(sched.filter((e) => e.kind === 'stop').length, 'the board stopped, so the note ended').toBe(1);
+  });
+
+  it('is quieter at a duty the pin barely moves through', () => {
+    // A passive buzzer puts out the fundamental of the square wave driving it,
+    // and that is loudest at 50% duty. analogWrite() on a buzzer is how people
+    // control volume; tone(), a 50% square, must be unaffected.
+    const { sim } = setupBuzzer();
+    useSimulatorStore.setState({ boards: [{ running: true }] as never });
+    const pwm = (sim.pinManager.onPwmChange as ReturnType<typeof vi.fn>).mock.calls[0][1] as (
+      p: number,
+      dc: number,
+      t?: number,
+    ) => void;
+    sim.cpu.data[OCR2A] = ocrFor(440);
+    sim.cpu.data[TCCR2B] = 0x04;
+
+    const peakOf = (duty: number, at: number) => {
+      clock = at;
+      pwm(11, duty, at * 1000);
+      const g = gains[gains.length - 1];
+      const ramp = g.gain.linearRampToValueAtTime.mock.calls.at(-1);
+      return ramp ? (ramp[0] as number) : 0;
+    };
+    const half = peakOf(0.5, 0);
+    const narrow = peakOf(0.1, 1);
+    expect(half, 'a 50% square is the loudest a pin can drive').toBeGreaterThan(narrow);
+    expect(narrow / half).toBeCloseTo(Math.sin(Math.PI * 0.1), 3);
+  });
+
+  it('leaves a buzzer alone while its own board is still running', () => {
+    // Two boards on the canvas: stopping one must not cut off a tone the
+    // other is still driving.
+    const { sim } = setupBuzzer();
+    useSimulatorStore.setState({ boards: [{ running: true }, { running: true }] as never });
+    const pwm = (sim.pinManager.onPwmChange as ReturnType<typeof vi.fn>).mock.calls[0][1] as (
+      p: number,
+      dc: number,
+      t?: number,
+    ) => void;
+    sim.cpu.data[OCR2A] = ocrFor(440);
+    sim.cpu.data[TCCR2B] = 0x04;
+    pwm(11, 0.5, 0);
+    useSimulatorStore.setState({ boards: [{ running: true }, { running: false }] as never });
+    expect(sched.filter((e) => e.kind === 'stop').length).toBe(0);
   });
 });
