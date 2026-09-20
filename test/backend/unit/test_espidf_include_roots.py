@@ -323,9 +323,14 @@ class TestLegacyLayoutStillWorks(IncludeRootsBase):
             self.assertFalse(d.endswith('platforms/stub'), d)
             self.assertFalse(d.endswith('fl/stl/asio/http'), d)
 
-    def test_no_private_include_dirs(self):
+    def test_no_per_library_private_include_dirs(self):
+        """Legacy mode exports every directory publicly, so it adds no private
+        root OF ITS OWN. The sketch directory is the one exception and is not
+        a per-library root at all: a library that reads the user's own
+        configuration header (the FastLED_config.h case) needs it on the
+        include path in both layouts, so it is added either way."""
         self.resolve(['LegacyLib.h'])
-        self.assertEqual(self.private_dirs(), [])
+        self.assertEqual(self.private_dirs(), ['../../main'])
 
 
 if __name__ == '__main__':
