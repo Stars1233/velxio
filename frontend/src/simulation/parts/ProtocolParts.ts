@@ -21,6 +21,7 @@
  */
 
 import { PartSimulationRegistry } from './PartSimulationRegistry';
+import { spiChainTag, spiChainUnder } from './spiChannel';
 import { requestLine, releaseLineGap } from '../line/requestLine';
 import { VirtualDS1307, VirtualBMP280, VirtualDS3231, VirtualPCF8574 } from '../I2CBusManager';
 import type { I2CDevice } from '../I2CBusManager';
@@ -966,10 +967,20 @@ const SD_CARD_BYTES = 64 * 1024 * 1024; // 64 MB
 const SD_C_SIZE = Math.floor(SD_CARD_BYTES / (512 * 1024)) - 1; // CSD v2 C_SIZE
 
 PartSimulationRegistry.register('microsd-card', {
-  attachEvents: (element, simulator, _getPin) => {
+  attachEvents: (element, simulator, getPin) => {
     const spi = (simulator as any).spi;
     if (!spi) return () => {};
     const el = element as any;
+
+    // The card answers only while its CS is low, and hands every other byte
+    // back to whoever had the bus. `spi.onByte` is a single-listener channel,
+    // so taking it unconditionally made a display on the same SCK/MOSI go
+    // silent the moment a card was dropped on the canvas — no wiring could
+    // avoid it, which is what issue #343 was about. An unwired CS keeps the
+    // old always-listening behaviour: nothing to share with.
+    const csPin = getPin('CS');
+    const pm = (simulator as any).pinManager;
+    let selected = csPin === null;
 
     // ── Backing store: sparse map of blockIndex -> 512-byte sector ──────────
     const store = new Map<number, Uint8Array>();
@@ -1147,9 +1158,14 @@ PartSimulationRegistry.register('microsd-card', {
       }
     };
 
-    const prevOnByte = spi.onByte as ((b: number) => void) | null | undefined;
+    const prevOnByte = spiChainUnder(spi.onByte, `sd:${(el?.id as string) ?? 'microsd'}`);
 
-    spi.onByte = (byte: number) => {
+    const onByte = (byte: number) => {
+      // Not ours: the bus belongs to whatever else is wired to it.
+      if (!selected) {
+        prevOnByte?.(byte);
+        return;
+      }
       // Full-duplex: the MISO shifted out for THIS transfer was prepared by
       // earlier bytes, so reply FIRST (from the queue as it stood before this
       // byte), THEN consume this MOSI byte to prepare future MISO. This gives
@@ -1202,9 +1218,28 @@ PartSimulationRegistry.register('microsd-card', {
           break;
       }
     };
+    spi.onByte = spiChainTag(onByte, `sd:${(el?.id as string) ?? 'microsd'}`, prevOnByte);
+
+    const csCleanup =
+      csPin !== null && pm
+        ? pm.onPinChange(csPin, (_p: number, level: boolean) => {
+            const now = !level; // active low
+            if (selected && !now) {
+              // Letting go of CS ends the transaction: a command frame still
+              // being clocked in cannot be finished by bytes meant for the
+              // display, and a reply nobody stayed to read is gone.
+              cmdBuf = [];
+              respQueue.length = 0;
+            }
+            selected = now;
+          })
+        : null;
 
     return () => {
-      spi.onByte = prevOnByte ?? null;
+      csCleanup?.();
+      // Only give the channel back if it is still ours — a part that attached
+      // after us owns it now, and clobbering that would mute IT instead.
+      if (spi.onByte === onByte) spi.onByte = prevOnByte ?? null;
       respQueue.length = 0;
       cmdBuf = [];
       store.clear();
