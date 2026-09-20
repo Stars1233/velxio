@@ -148,6 +148,32 @@ describe('one I2C transaction', () => {
   });
 });
 
+describe('one SPI transaction', () => {
+  it('X clocks the bytes out and answers MISO; W clocks the same bytes and answers nothing', () => {
+    // A guest that passed no rx buffer used to be answered anyway, and the
+    // daemon blocked on a reply it discarded: one round trip per chunk of a
+    // display frame. W and WC are the fire-and-forget form.
+    const { shim } = addPi();
+    const seen: number[] = [];
+    shim.setSPIHandler(0, (mosi: number) => {
+      seen.push(mosi);
+      return 0x5a;
+    });
+    expect(shim.answerBusLine('SPI 0 0 X a1b2')).toBe('SPI_DATA 0 0 5a5a');
+    expect(shim.answerBusLine('SPI 0 0 W c3d4')).toBeNull();
+    expect(seen).toEqual([0xa1, 0xb2, 0xc3, 0xd4]);
+  });
+
+  it('WC holds the chip select down after the last byte, exactly as XC does', () => {
+    const { id, shim } = addPi();
+    shim.setSPIHandler(0, () => 0xff);
+    shim.answerBusLine('SPI 0 0 WC a1');
+    expect(getBoardPinManager(id)?.getPinState(8)).toBe(false); // CE0 still low
+    shim.answerBusLine('SPI 0 0 W b2');
+    expect(getBoardPinManager(id)?.getPinState(8)).toBe(true); // released
+  });
+});
+
 describe('what the guest tells the canvas', () => {
   it('PWM_START reaches the PinManager as a 0-1 duty', () => {
     const { id, shim } = addPi();
