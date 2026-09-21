@@ -121,6 +121,23 @@
   text-decoration: underline;
 }
 
+/* `[label](url "button")` in the post body: the post's call to action. */
+.velxio-news-body a.velxio-news-cta {
+  display: inline-block;
+  margin: 2px 8px 6px 0;
+  padding: 8px 16px;
+  border-radius: 8px;
+  border: 1px solid var(--color-accent-fg);
+  color: var(--color-accent-fg);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.velxio-news-body a.velxio-news-cta:hover {
+  text-decoration: none;
+  background: var(--wb-4);
+}
+
 .velxio-news-body code {
   background: var(--wb-4);
   border-radius: 4px;

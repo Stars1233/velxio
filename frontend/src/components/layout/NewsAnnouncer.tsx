@@ -16,13 +16,19 @@
  * almost immediately — the starter dialog is waiting on the decision —
  * and every failure path resolves to "nothing shown", which opens the
  * gate. The last delivered post stays reachable from Help ▸ What's new.
+ *
+ * Every showing ends in exactly one 'close' event that says how it was
+ * closed, how long it was on screen (visible-tab time only, so a reader
+ * who opened a link in a new tab is not credited with that time), how
+ * far the body was scrolled and how many links were used: the
+ * difference between a post that was read and one dismissed on sight.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { getNextNews, type NewsPost } from '../../lib/newsSource';
-import { reportNewsEvent } from '../../lib/newsEvents';
+import { reportNewsEvent, type NewsCloseVia } from '../../lib/newsEvents';
 import { markNewsShowing, markNewsNone, markNewsClosed } from '../../lib/newsGate';
 import { NewsMarkdown } from './NewsMarkdown';
 import { registerEditorCommand } from '../../lib/editorCommands';
@@ -32,10 +38,54 @@ import './NewsAnnouncer.css';
  *  first render burst; kept tiny because the starter dialog waits on us. */
 const FETCH_DELAY_MS = 250;
 
+/** One open-to-close span of the modal. */
+interface Showing {
+  postId: string;
+  visibleMs: number;
+  /** performance.now() when the tab last became visible; null while hidden. */
+  visibleSince: number | null;
+  scrollDepth: number;
+  interactions: number;
+}
+
+function startShowing(postId: string): Showing {
+  return {
+    postId,
+    visibleMs: 0,
+    visibleSince: document.visibilityState === 'visible' ? performance.now() : null,
+    scrollDepth: 0,
+    interactions: 0,
+  };
+}
+
+function scrollDepthOf(el: HTMLElement): number {
+  const scrollable = el.scrollHeight - el.clientHeight;
+  if (scrollable <= 1) return 1;
+  return Math.min(1, Math.max(0, el.scrollTop / scrollable));
+}
+
 export function NewsAnnouncer() {
   const { t } = useTranslation();
   const [post, setPost] = useState<NewsPost | null>(null);
   const [expanded, setExpanded] = useState(false);
+  const showing = useRef<Showing | null>(null);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
+  /** Report the current showing as closed. Idempotent: the first caller
+   *  wins, so a pagehide after a click-close reports nothing twice. */
+  const endShowing = useCallback((via: NewsCloseVia) => {
+    const s = showing.current;
+    if (!s) return;
+    showing.current = null;
+    const visibleMs =
+      s.visibleMs + (s.visibleSince !== null ? performance.now() - s.visibleSince : 0);
+    reportNewsEvent('close', s.postId, {
+      via,
+      durationMs: Math.round(visibleMs),
+      scrollDepth: Math.round(s.scrollDepth * 100) / 100,
+      interactions: s.interactions,
+    });
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -49,6 +99,7 @@ export function NewsAnnouncer() {
         setPost(p);
         setExpanded(true);
         markNewsShowing();
+        showing.current = startShowing(p.id);
         reportNewsEvent('impression', p.id);
       });
     }, FETCH_DELAY_MS);
@@ -66,20 +117,63 @@ export function NewsAnnouncer() {
   useEffect(() => {
     if (!post) return;
     return registerEditorCommand('help.whatsNew', () => {
+      if (!showing.current) showing.current = startShowing(post.id);
       setExpanded(true);
       reportNewsEvent('open', post.id, { via: 'menu' });
     });
   }, [post]);
 
+  // While the modal is up: Escape closes it, hidden-tab time is not
+  // counted, and leaving the page still reports how the showing ended.
+  useEffect(() => {
+    if (!post || !expanded) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      endShowing('escape');
+      setExpanded(false);
+      markNewsClosed();
+    };
+    const onVisibility = () => {
+      const s = showing.current;
+      if (!s) return;
+      if (document.visibilityState === 'visible') {
+        if (s.visibleSince === null) s.visibleSince = performance.now();
+      } else if (s.visibleSince !== null) {
+        s.visibleMs += performance.now() - s.visibleSince;
+        s.visibleSince = null;
+      }
+    };
+    const onPageHide = () => endShowing('leave');
+    const body = bodyRef.current;
+    const onScroll = () => {
+      const s = showing.current;
+      if (s && body) s.scrollDepth = Math.max(s.scrollDepth, scrollDepthOf(body));
+    };
+    // A body that fits without scrolling counts as fully seen; images
+    // load late and can make it scrollable, which onScroll then tracks.
+    onScroll();
+    window.addEventListener('keydown', onKey);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pagehide', onPageHide);
+    body?.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pagehide', onPageHide);
+      body?.removeEventListener('scroll', onScroll);
+    };
+  }, [post, expanded, endShowing]);
+
   if (!post || !expanded) return null;
 
-  const close = () => {
+  const close = (via: NewsCloseVia) => {
+    endShowing(via);
     setExpanded(false);
     markNewsClosed();
   };
 
   return createPortal(
-    <div className="velxio-news-overlay" onClick={close}>
+    <div className="velxio-news-overlay" onClick={() => close('backdrop')}>
       <div
         className="velxio-news-modal"
         role="dialog"
@@ -97,26 +191,27 @@ export function NewsAnnouncer() {
           <button
             className="velxio-news-close"
             aria-label={t('news.close', 'Close')}
-            onClick={close}
+            onClick={() => close('x')}
           >
             ×
           </button>
         </div>
-        <div className="velxio-news-body">
+        <div className="velxio-news-body" ref={bodyRef}>
           <NewsMarkdown
-            onInteract={(kind, href) =>
+            onInteract={(kind, href) => {
+              if (showing.current) showing.current.interactions += 1;
               reportNewsEvent(
                 kind === 'video' ? 'video_play' : 'link_click',
                 post.id,
                 { href },
-              )
-            }
+              );
+            }}
           >
             {post.body_md}
           </NewsMarkdown>
         </div>
         <div className="velxio-news-footer">
-          <button className="velxio-news-ok" onClick={close}>
+          <button className="velxio-news-ok" onClick={() => close('button')}>
             {t('news.gotIt', 'Got it')}
           </button>
         </div>

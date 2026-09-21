@@ -15,6 +15,9 @@
  *   - A bare image URL (autolinked by GFM, link text == href) renders
  *     as the image itself — authors paste screenshot URLs without
  *     knowing the ![](…) syntax. An explicit [label](…png) stays a link.
+ *   - A link titled "button" — `[Try the example](https://… "button")` —
+ *     renders as a call-to-action button instead of inline text. Same
+ *     click tracking as any other link; the title is consumed, not shown.
  *   - All links open in a new tab (the modal sits on top of the editor;
  *     navigating away would lose workspace state).
  *
@@ -85,7 +88,7 @@ export function NewsMarkdown({
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        a: ({ href, children: kids }) => {
+        a: ({ href, title, children: kids }) => {
           const text = Array.isArray(kids) ? kids.join('') : String(kids ?? '');
           const id = href ? youTubeId(href) : null;
           if (id) {
@@ -111,9 +114,12 @@ export function NewsMarkdown({
           if (href && isImageHref(href) && (!text || text === href)) {
             return <img src={href} alt="" loading="lazy" />;
           }
+          const isButton = title === 'button';
           return (
             <a
               href={href}
+              className={isButton ? 'velxio-news-cta' : undefined}
+              title={isButton ? undefined : title}
               target="_blank"
               rel="noreferrer"
               onClick={() => href && onInteract?.('link', href)}
