@@ -28,6 +28,7 @@ import {
 import { Uc8179Decoder, type Uc8179Diagnostic } from '../displays/Uc8179Decoder';
 import { PANEL_CONFIGS, getPanelConfig, PANEL_IDS, busyLevels } from '../displays/EPaperPanels';
 import { RP2040Simulator } from '../RP2040Simulator';
+import { spiChainAttach } from './spiChannel';
 import { recordPartGap, releaseLineGap } from '../line/requestLine';
 import { useSimulatorStore, appendSimulatorNote } from '../../store/useSimulatorStore';
 
@@ -390,16 +391,15 @@ const epaperSimulation = {
         }
       } else if (hasSpiAdapter(simulator)) {
         const spi = (simulator as AvrLikeSimulator).spi!;
-        // The previous listener, or null: never `.bind()` it, the slot is
-        // empty on a board nobody has listened on yet.
-        const prev = spi.onByte;
-        spi.onByte = (value: number) => {
-          if (csLow || csPin === null) decoder.feed(value, dcHigh);
-          spi.completeTransfer(0xff);
-        };
-        cleanups.push(() => {
-          spi.onByte = prev;
-        });
+        // Joins the chain: write-only, so it answers idle and passes every
+        // byte on to whatever else shares the bus (see spiChannel).
+        cleanups.push(
+          spiChainAttach(spi, `epaper:${componentId}`, (value, next) => {
+            if (csLow || csPin === null) decoder.feed(value, dcHigh);
+            spi.completeTransfer(0xff);
+            next?.(value);
+          }),
+        );
       }
     };
 

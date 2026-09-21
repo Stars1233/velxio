@@ -17,6 +17,11 @@
  * fans out to every chip subscribed, regardless of family.
  */
 import { SPIBus } from './SPIBus';
+import { spiChainAttach } from '../parts/spiChannel';
+
+/** The custom chips' place in a board's SPI chain (one per simulator: every
+ *  chip on it sits behind the same SPIBus). */
+const CHIP_SPI_OWNER = 'custom-chips';
 
 export type SimulatorKind = 'avr' | 'rp2040' | 'esp32' | 'unknown';
 
@@ -67,8 +72,6 @@ export interface SimulatorBridges {
   spiBus: SPIBus;
   /** Whether the SPI dispatcher has already been wired. */
   spiInstalled: boolean;
-  /** Original SPI byte handler (preserved for restore). */
-  spiPreviousOnByte: ((byte: number) => void) | null;
 }
 
 const SIM_BRIDGES = new WeakMap<object, SimulatorBridges>();
@@ -88,7 +91,6 @@ export function getSimulatorBridges(simulator: any): SimulatorBridges {
       uartDrainHandle: 0,
       spiBus: new SPIBus(),
       spiInstalled: false,
-      spiPreviousOnByte: null,
     };
     SIM_BRIDGES.set(simulator, b);
   }
@@ -226,23 +228,36 @@ export function avrUartTx(simulator: any, byte: number): void {
  */
 export function ensureSpiBridge(simulator: any): void {
   const b = getSimulatorBridges(simulator);
-  if (b.spiInstalled) return;
   const kind = detectSimulatorKind(simulator);
 
   // The ESP32 shim exposes the same `{ onByte, completeTransfer }` adapter
   // (completeTransfer hands MISO to the bridge's setSpiResponse), so a chip
   // hosted in the browser next to an in-browser engine gets SPI the AVR way.
   if ((kind === 'avr' || kind === 'esp32') && simulator.spi) {
-    b.spiPreviousOnByte = simulator.spi.onByte ?? null;
-    simulator.spi.onByte = (mosi: number) => {
-      const miso = b.spiBus.transferByte(mosi);
-      simulator.spi.completeTransfer(miso);
-    };
+    // A chip shares the board's bus with every other SPI part (a display, its
+    // touch panel, a card), so it joins the chain instead of taking the
+    // channel: it answers only while one of its chips is selected, and
+    // otherwise idles and passes the byte along. Taking the channel used to
+    // deafen whatever had attached first — a Grove sensor model on the board
+    // killed the ILI9488's touch panel (issue #355).
+    //
+    // Joined on EVERY call, not once: attaching under the same owner replaces
+    // the previous incarnation, so a part that dropped the chain on its way
+    // out cannot leave the chips off the bus for the rest of the run.
+    spiChainAttach(simulator.spi, CHIP_SPI_OWNER, (mosi, next) => {
+      if (b.spiBus.active) {
+        simulator.spi.completeTransfer(b.spiBus.transferByte(mosi));
+        return;
+      }
+      simulator.spi.completeTransfer(0xff);
+      next?.(mosi);
+    });
     b.spiInstalled = true;
     return;
   }
 
   if (kind === 'rp2040' && typeof simulator.setSPIHandler === 'function') {
+    if (b.spiInstalled) return;
     // RP2040 has SPI0 and SPI1; we route both through the same bus so
     // CS-gated chips can live on either.
     for (const bus of [0, 1] as const) {

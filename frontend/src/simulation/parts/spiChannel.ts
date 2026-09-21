@@ -90,3 +90,30 @@ export function spiChainTag(
   (handler as Chained)[LINK] = link;
   return handler;
 }
+
+/**
+ * Join the channel as `owner`; returns the function that leaves it.
+ *
+ * The one entry point every SPI listener should use. `handler` gets each byte
+ * plus whatever sits below it in the chain, read at call time. The contract on
+ * a shared bus, same as the wire: a device that is NOT selected answers idle
+ * (0xff) and passes the byte along; a selected device answers with its own
+ * byte. Whoever answers last for a byte wins, so an idle listener answers
+ * BEFORE forwarding and never after.
+ *
+ * Leaving goes through spiChainDetach, never by writing back the handler found
+ * at attach time: a listener that joined later sits on top of us, and writing
+ * our predecessor back into the head silently threw it off the bus. That is
+ * how a touch panel went deaf the moment a Grove sensor model shared its board
+ * (issue #355), and how the chip models lost the bus when the panel remounted.
+ */
+export function spiChainAttach(
+  spi: { onByte: SpiByteHandler | null },
+  owner: string,
+  handler: (byte: number, next: SpiByteHandler | null) => void,
+): () => void {
+  const link = spiChainUnder(spi.onByte, owner);
+  const onByte = spiChainTag((byte: number) => handler(byte, link.next), owner, link);
+  spi.onByte = onByte;
+  return () => spiChainDetach(spi, onByte);
+}

@@ -66,6 +66,13 @@ export class SPIBus {
     this.devices.delete(dev);
   }
 
+  /** Whether any chip on the bus is selected (its CS asserted, a transfer
+   *  armed). A byte clocked while none is belongs to some other part. */
+  get active(): boolean {
+    for (const d of this.devices) if (d.hasPendingTransfer()) return true;
+    return false;
+  }
+
   /** Transfer one byte. Returns the active slave's response on MISO. */
   transferByte(masterByte: number): number {
     for (const d of this.devices) {

@@ -16,6 +16,8 @@ import {
   ensureSpiBridge,
   getSimulatorBridges,
 } from '../simulation/customChips/simulatorBridges';
+import type { SPIDevice } from '../simulation/customChips/SPIBus';
+import { spiChainAttach } from '../simulation/parts/spiChannel';
 
 function esp32Shim(extra: Record<string, unknown> = {}) {
   const added: Array<{ device: unknown; bus: number }> = [];
@@ -89,5 +91,78 @@ describe('custom chips on an ESP32 shim', () => {
     // idle answer, so the engine's SPI master is never left waiting.
     spi.onByte!(0xa5);
     expect(spi.completed).toHaveLength(1);
+  });
+
+  // Issue #355: an ILI9488 touch panel went deaf the moment a Grove sensor
+  // model (a custom chip) sat on the same board. The chip bridge took the SPI
+  // channel for itself instead of joining the chain.
+  it('shares the SPI bus with a part that attached before it', () => {
+    const { sim, spi } = esp32Shim({ hostsCustomChips: () => false });
+    let touchSelected = false;
+    const touchHeard: number[] = [];
+    spiChainAttach(spi, 'touch:tft', (mosi, next) => {
+      if (touchSelected) {
+        touchHeard.push(mosi);
+        spi.completeTransfer(0x42);
+        return;
+      }
+      next?.(mosi);
+    });
+    ensureSpiBridge(sim);
+
+    touchSelected = true;
+    spi.onByte!(0xd0);
+    expect(touchHeard).toEqual([0xd0]);
+    // Last answer wins on the engine: the touch panel's, not the chips' idle.
+    expect(spi.completed.at(-1)).toBe(0x42);
+  });
+
+  it('answers only while one of its chips is selected', () => {
+    const { sim, spi } = esp32Shim({ hostsCustomChips: () => false });
+    const below: number[] = [];
+    spiChainAttach(spi, 'display:tft', (mosi, next) => {
+      below.push(mosi);
+      spi.completeTransfer(0xff);
+      next?.(mosi);
+    });
+    ensureSpiBridge(sim);
+    let armed = false;
+    const chip = {
+      hasPendingTransfer: () => armed,
+      transfer: (mosi: number) => mosi ^ 0xff,
+    } as unknown as SPIDevice;
+    getSimulatorBridges(sim).spiBus.addDevice(chip);
+
+    spi.onByte!(0x11); // chip deselected: the byte goes on down the chain
+    expect(below).toEqual([0x11]);
+    armed = true;
+    spi.onByte!(0x0f); // chip selected: it answers, nobody else hears it
+    expect(spi.completed.at(-1)).toBe(0xf0);
+    expect(below).toEqual([0x11]);
+  });
+
+  it('stays on the bus when a part below it leaves', () => {
+    const { sim, spi } = esp32Shim({ hostsCustomChips: () => false });
+    const leave = spiChainAttach(spi, 'touch:tft', (mosi, next) => next?.(mosi));
+    ensureSpiBridge(sim);
+    leave();
+    let armed = true;
+    getSimulatorBridges(sim).spiBus.addDevice({
+      hasPendingTransfer: () => armed,
+      transfer: () => 0x5a,
+    } as unknown as SPIDevice);
+    spi.onByte!(0x00);
+    expect(spi.completed.at(-1)).toBe(0x5a);
+    armed = false;
+  });
+
+  it('joins once however many chips ask for the bus', () => {
+    const { sim, spi } = esp32Shim({ hostsCustomChips: () => false });
+    ensureSpiBridge(sim);
+    ensureSpiBridge(sim);
+    ensureSpiBridge(sim);
+    spi.onByte!(0x33);
+    // One idle answer per byte: a second copy of the bridge would add another.
+    expect(spi.completed).toEqual([0xff]);
   });
 });

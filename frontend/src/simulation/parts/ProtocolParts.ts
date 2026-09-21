@@ -21,7 +21,7 @@
  */
 
 import { PartSimulationRegistry } from './PartSimulationRegistry';
-import { spiChainDetach, spiChainTag, spiChainUnder } from './spiChannel';
+import { spiChainAttach, spiChainDetach, spiChainTag, spiChainUnder } from './spiChannel';
 import { requestLine, releaseLineGap } from '../line/requestLine';
 import { VirtualDS1307, VirtualBMP280, VirtualDS3231, VirtualPCF8574 } from '../I2CBusManager';
 import type { I2CDevice } from '../I2CBusManager';
@@ -320,21 +320,37 @@ function attachSSD1306SPI(
     });
   };
 
-  // Hook AVR SPI bus (onByte + completeTransfer)
-  const prevOnByte = spi.onByte;
-  spi.onByte = (value: number) => {
-    if (!dcState) {
-      core.writeCommand(value);
-    } else {
-      core.writeData(value);
-      dirty = true;
-      scheduleSync();
+  // Chip select. This mode is only picked when CS is wired, and on a shared
+  // bus the panel must ignore every byte clocked for somebody else, as the
+  // real controller does (it latches nothing while CS is high).
+  let csLow = false;
+  const pinCS = getPin('CS');
+  if (pinCS !== null) {
+    unsubs.push(
+      pinManager.onPinChange(pinCS, (_: number, s: boolean) => {
+        csLow = !s;
+      }),
+    );
+  }
+
+  // Join the board's SPI chain (onByte + completeTransfer). Write-only: the
+  // panel answers idle and passes every byte along.
+  const leaveSpi = spiChainAttach(spi, `ssd1306:${(element as { id?: string }).id || 'panel'}`, (value, next) => {
+    if (csLow || pinCS === null) {
+      if (!dcState) {
+        core.writeCommand(value);
+      } else {
+        core.writeData(value);
+        dirty = true;
+        scheduleSync();
+      }
     }
     spi.completeTransfer(0xff);
-  };
+    next?.(value);
+  });
 
   return () => {
-    spi.onByte = prevOnByte;
+    leaveSpi();
     if (rafId !== null) cancelAnimationFrame(rafId);
     unsubs.forEach((u) => u());
   };
