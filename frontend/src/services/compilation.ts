@@ -248,6 +248,18 @@ export async function compileCode(
   onProgress?: CompileProgress,
   extras?: CompileExtras,
 ): Promise<CompileResult> {
+  // Overlay seam: a project that ships a prebuilt image instead of sources the
+  // server can build returns it here. No provider in OSS builds -> null.
+  const prebuilt = await (
+    window as {
+      __velxio_prebuilt_firmware__?: (
+        files: SketchFile[],
+        board: string,
+      ) => Promise<CompileResult | null>;
+    }
+  ).__velxio_prebuilt_firmware__?.(files, board);
+  if (prebuilt) return prebuilt;
+
   console.log('Sending compilation request to:', `${getApiBase()}/compile/start`);
   console.log('Board:', board);
   console.log(
