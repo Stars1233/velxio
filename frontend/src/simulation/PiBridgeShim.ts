@@ -527,8 +527,7 @@ export class PiBridgeShim {
    * bridge's `onUartTx` ({@link tapHeaderUartTx}), the in-browser engine
    * through `feedBoardSerialOut`, which Interconnect hands on. Neither
    * fan-out is rerouted, so board-to-board forwarding is untouched.
-   */
-  /**
+   *
    * TEMPORARY, and the name says so on purpose. board-buses-2026-09 phase F6
    * replaces every per-engine UART hook with membership derived from the TX
    * and RX nets, and deletes `ensureUartBridge` and its kind switch outright.
@@ -558,6 +557,15 @@ export class PiBridgeShim {
     // RaspberryPi3Bridge declares it; the reduced doubles the suites use for
     // other boards do not, and they are the ones that fallback is for.
     if (!('onUartTx' in bridge)) return;
+    // Wrap once. Today a second wrap cannot happen (the store makes one shim
+    // per board and hands it a freshly constructed bridge), but the failure
+    // mode if that ever changes is silent doubling of every byte, which is
+    // far harder to notice than silence: an AT modem would see "ATAT". The
+    // marker is the same one Interconnect uses on the same object for the
+    // same reason.
+    const marked = bridge as unknown as { __piHeaderUartTap?: boolean };
+    if (marked.__piHeaderUartTap) return;
+    marked.__piHeaderUartTap = true;
     const previous = bridge.onUartTx ?? null;
     bridge.onUartTx = (text: string) => {
       previous?.(text);
