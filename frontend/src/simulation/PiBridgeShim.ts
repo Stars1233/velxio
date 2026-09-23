@@ -417,9 +417,23 @@ export class PiBridgeShim {
    * The Pi has no ADC. Said once per pin in the console and recorded as a
    * gap for the circuit check, instead of the silent AVR fallback a shim
    * without this method used to get. Returns false: nothing was set.
+   *
+   * The message names ONE way out, and it used to name two. An ADS1115 was
+   * the other half of the advice, and on this simulator that half did not
+   * work: the model answers from its own four sliders and never reads the
+   * net its channel pads sit on, so a part wired to it reads as whatever the
+   * inspector says and turning the knob changes nothing. Sending a user down
+   * a road that dead-ends is worse than a shorter refusal, so the sentence
+   * keeps the route that was MEASURED to work end to end: a Grove rotary
+   * angle sensor at 120 degrees into an MCP3008's CH0 reads 2.00 V on
+   * velxio.dev, in the browser engine and in the Linux guest, through the
+   * circuit solve and real spidev (the `grove-analog-mcp3008` cell of
+   * velxio-prod's pi-parts-matrix). The ADS1115 can come back into the
+   * sentence the day it reads its pads: board-buses-2026-09 has that as
+   * `ads1115-reads-sliders-not-the-wired-net`.
    */
   setAdcVoltage(pin: number, _voltage: number): boolean {
-    const why = `${this.boardKind.startsWith('raspberry-pi') ? 'the Raspberry Pi' : 'this board'} has no analog input; use an MCP3008 (SPI) or an ADS1115 (I2C)`;
+    const why = `${this.boardKind.startsWith('raspberry-pi') ? 'the Raspberry Pi' : 'this board'} has no analog input; wire the part to an MCP3008 (SPI) and read the channel it sits on`;
     recordPartGap({ sensorType: 'analog input', pin, why, code: 'no-adc' });
     if (!this.adcWarned.has(pin)) {
       this.adcWarned.add(pin);

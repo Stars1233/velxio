@@ -340,7 +340,13 @@ describe('what the guest tells the canvas', () => {
     expect(shim.setAdcVoltage(26, 1.65)).toBe(false);
     const gap = lineGaps().find((g) => g.code === 'no-adc');
     expect(gap?.pin).toBe(26);
+    // The advice has to name a route that WORKS. The MCP3008 reads the
+    // voltage the circuit solve publishes for the net its channel sits on,
+    // measured end to end on production in both engines. The ADS1115 was in
+    // this sentence too and answers from its own sliders instead of its pads,
+    // so it sent the user to a dead end; it stays out until it reads them.
     expect(gap?.why).toMatch(/MCP3008/);
+    expect(gap?.why).not.toMatch(/ADS1115/);
   });
 });
 
