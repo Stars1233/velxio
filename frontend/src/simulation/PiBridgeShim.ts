@@ -171,6 +171,18 @@ export class PiBridgeShim {
   readonly boardId: string;
   readonly boardKind: string;
   pinManager: PinManager;
+  /**
+   * One character the board just put on its HEADER UART, for the parts wired
+   * to it. Fed by {@link noteHeaderUartTxTemporary} and by nothing else.
+   *
+   * The slot carries the rp2040 name because `detectSimulatorKind` files this
+   * shim as rp2040 (it has `addI2CDevice` and `setSPIHandler`), so
+   * `ensureUartBridge` wraps exactly this one to fan bytes out to the UART
+   * parts. It is not the serial monitor: the Pi's console is fed from
+   * `RaspberryPi3Bridge.onSerialData`, which the store wires separately, so
+   * unlike the ESP32 and STM32 shims nothing ever assigns this property and
+   * the parts are its only consumer.
+   */
   onSerialData: ((ch: string) => void) | null = null;
   onPinChangeWithTime: ((pin: number, state: boolean, timeMs: number) => void) | null = null;
   private _instantAdapter: PiInstantAdapter | null = null;
@@ -238,6 +250,7 @@ export class PiBridgeShim {
     this.pinManager = opts.pinManager;
     this.boardState = opts.boardState;
     this.i2cBusInstance = new I2CBusManager(nullI2CMaster());
+    this.tapHeaderUartTx();
   }
 
   // ── Lifecycle (the store drives the guest through the bridge / engine) ──
@@ -496,7 +509,63 @@ export class PiBridgeShim {
     return { mode: 'none', why: PIXEL_SUPPORT_NONE_WHY };
   }
 
-  // ── Header UART (a wired peer board's TX) ──────────────────────────────
+  // ── Header UART: what the board TRANSMITS ──────────────────────────────
+  /**
+   * One chunk the board just wrote to its header UART, handed on to the
+   * parts wired to it.
+   *
+   * Until this existed the shim's whole UART surface was the RX direction
+   * below, and the board's outgoing bytes never passed through it in either
+   * engine: they went straight to the cross-board fan-out (Interconnect's
+   * `serialFanout`), which only ever reaches other BOARDS. So a part could
+   * talk to the Pi and the Pi could talk to a peer board, but a module that
+   * only answers when spoken to never heard the question. The two GPS bricks
+   * were the exception, and only because a GPS never listens: it just pushes
+   * NMEA.
+   *
+   * Both engines end here and nowhere else: the Linux guest through the
+   * bridge's `onUartTx` ({@link tapHeaderUartTx}), the in-browser engine
+   * through `feedBoardSerialOut`, which Interconnect hands on. Neither
+   * fan-out is rerouted, so board-to-board forwarding is untouched.
+   */
+  /**
+   * TEMPORARY, and the name says so on purpose. board-buses-2026-09 phase F6
+   * replaces every per-engine UART hook with membership derived from the TX
+   * and RX nets, and deletes `ensureUartBridge` and its kind switch outright.
+   * When that lands, this method and both of its callers go with it. It is
+   * named this way so that project can find every caller without grepping for
+   * who else might depend on it: the answer is nobody outside this file and
+   * Interconnect.
+   */
+  noteHeaderUartTxTemporary(text: string): void {
+    const sink = this.onSerialData;
+    if (!sink || !text) return;
+    for (const ch of text) sink(ch);
+  }
+
+  /**
+   * Chain onto the bridge's TX callback instead of owning it. Interconnect
+   * takes the same slot for the board-to-board wires and chains whatever it
+   * finds there (its `__icUartHook` branch), so whichever installs first the
+   * other still runs and each byte is delivered once on each path.
+   */
+  private tapHeaderUartTx(): void {
+    const bridge = this.bridge as unknown as { onUartTx?: ((text: string) => void) | null };
+    // Only tap a bridge that DECLARES the slot. Interconnect decides between
+    // the header UART and the console with the same `'onUartTx' in bridge`
+    // test, so creating the property on a bridge that has no header UART
+    // would move it off the console fallback and mute a wired peer board.
+    // RaspberryPi3Bridge declares it; the reduced doubles the suites use for
+    // other boards do not, and they are the ones that fallback is for.
+    if (!('onUartTx' in bridge)) return;
+    const previous = bridge.onUartTx ?? null;
+    bridge.onUartTx = (text: string) => {
+      previous?.(text);
+      this.noteHeaderUartTxTemporary(text);
+    };
+  }
+
+  // ── Header UART: what the board RECEIVES ───────────────────────────────
   /** Raw bytes into the guest's header UART RX, by engine. */
   sendSerialBytes(bytes: number[], _uart = 0): void {
     if (!bytes.length) return;
